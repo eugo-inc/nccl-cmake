@@ -62,8 +62,13 @@ NCCL_DEVICE_INLINE ncclLsaBarrierSession<Coop>::~ncclLsaBarrierSession() {
 
 // @EUGO_CHANGE: `#if` -> `#ifdef`
 #ifdef __CUDACC__
-template<typename Coop>
-  #if __CUDA_ARCH__ >= 900
+template <typename Coop>
+NCCL_DEVICE_INLINE void ncclLsaBarrierSession<Coop>::arrive(Coop, cuda::memory_order order)
+{
+  this->coop.sync();
+  if (this->multimem)
+  {
+#if __CUDA_ARCH__ >= 900
     if (this->coop.thread_rank() == 0) {
       uint32_t* inbox = this->mcInbox(/*multimem=*/true);
       if (nccl::utility::releaseOrderOf(order) != cuda::memory_order_relaxed) {
@@ -72,9 +77,11 @@ template<typename Coop>
         asm volatile("multimem.red.relaxed.sys.add.u32 [%0],1;" :: "l"(inbox));
       }
     }
-  #endif
-  } else {
-    #pragma unroll 1
+#endif
+  }
+  else
+  {
+#pragma unroll 1
     for (int i = this->coop.thread_rank(); i < this->team.nRanks-1; i += this->coop.size()) {
       int peer = i + (this->team.rank <= i ? 1 : 0);
       cuda::atomic_ref<uint32_t> inbox(*this->ucInbox(peer, this->team.rank));

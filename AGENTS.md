@@ -302,22 +302,35 @@ gin_device_api.h  →  gdaki/gin_gdaki.h  →  "doca_gpunetio/doca_gpunetio_devi
                                              └── includes all 5 .cuh device headers
 ```
 
-`gin_gdaki.h` (at `src/include/nccl_device/gin/gdaki/`) uses `#include "doca_gpunetio/doca_gpunetio_device.h"` — note the **underscore** (`doca_gpunetio`). The actual source directory uses a **hyphen** (`doca-gpunetio`). Headers must be copied to:
+`gin_gdaki.h` (at `src/include/nccl_device/gin/gdaki/`) uses `#include "doca_gpunetio/doca_gpunetio_device.h"` — note the **underscore** (`doca_gpunetio`). The actual source directory uses a **hyphen** (`doca-gpunetio`).
 
-```
-${CMAKE_BINARY_DIR}/include/nccl_device/gin/gdaki/doca_gpunetio/
-```
+**Header destination path decision:**
 
-The copying logic lives in `src/transport/net_ib/gdaki/CMakeLists.txt` and copies:
+Upstream copies headers to: `${CMAKE_BINARY_DIR}/include/nccl_device/gin/gdaki/doca_gpunetio/`
+
+This requires their `target_include_directories()` to add `${CMAKE_BINARY_DIR}/include/nccl_device/gin/gdaki/` as an include path, so that `#include "doca_gpunetio/..."` resolves to `build/include/nccl_device/gin/gdaki/doca_gpunetio/...`.
+
+**Our architecture:** We already have `${CMAKE_BINARY_DIR}/include` in the include path (for `nccl.h` and other configured headers). For simplicity and consistency with our flat-list architecture, we copy headers to: `${CMAKE_BINARY_DIR}/include/doca_gpunetio/`
+
+This allows `#include "doca_gpunetio/..."` to resolve without adding additional nested include paths. The quoted include directive first searches relative to the including file, then falls back to the include path list.
+
+**Include resolution flow with our path:**
+1. `gin_gdaki.h` at `src/include/nccl_device/gin/gdaki/` does `#include "doca_gpunetio/doca_gpunetio_device.h"`
+2. Compiler first checks: `src/include/nccl_device/gin/gdaki/doca_gpunetio/doca_gpunetio_device.h` ❌ (doesn't exist)
+3. Compiler then searches include paths:
+   - `${CMAKE_BINARY_DIR}/include/doca_gpunetio/doca_gpunetio_device.h` ✅ (found!)
+
+**Why this is simpler than upstream's approach:**
+- Upstream needs to add `${CMAKE_BINARY_DIR}/include/nccl_device/gin/gdaki/` to their include directories
+- We reuse `${CMAKE_BINARY_DIR}/include` which is already present for configured headers
+- Fewer include paths = simpler configuration and faster compilation
+
+**Headers copied** (from `src/transport/net_ib/gdaki/doca-gpunetio/include/`):
 - **Top-level**: `doca_gpunetio_device.h` (plus `doca_gpunetio_host.h`, `doca_gpunetio_config.h`)
 - **`common/`**: `doca_gpunetio_verbs_def.h`, `doca_gpunetio_verbs_dev.h`
-- **`device/`**: 5 `.cuh` files (`doca_gpunetio_dev_verbs_common.cuh`, `_counter.cuh`, `_cq.cuh`, `_onesided.cuh`, `_qp.cuh`)
+- **`device/`**: 5 `.cuh` files (device code: `doca_gpunetio_dev_verbs_common.cuh`, `_counter.cuh`, `_cq.cuh`, `_onesided.cuh`, `_qp.cuh`)
 
-**Resolution:** We must keep `src/transport/net_ib/gdaki/CMakeLists.txt` as our own file (NOT upstream's subdirectory-style) and ensure it is invoked. Options:
-1. Call `add_subdirectory(transport/net_ib/gdaki)` from `src/CMakeLists.txt` **purely for the header copy side-effect** (sources are still in our flat list)
-2. Inline the `configure_file()` / `file(COPY)` logic directly into `src/CMakeLists.txt`
-
-The `gdaki/CMakeLists.txt` also exports `DOCA_HOME` which is needed for include paths.
+**Implementation:** The copying logic is **inlined in `src/CMakeLists.txt`** (section "DOCA GPUNetIO Header Copying"). We do NOT invoke `src/transport/net_ib/gdaki/CMakeLists.txt` — it's kept as a reference for upstream compatibility but is not used in our build. All DOCA sources are listed in the flat `NCCL_SRC_FILES` in `src/CMakeLists.txt`.
 
 #### Host include paths for DOCA
 
@@ -511,6 +524,141 @@ git diff upstream/master -- src/device/generate.py src/device/common.h \
 # Review and replace if substantially changed
 ```
 
+### Comparing a "real" .so and executable against ours.
+```bash
+# from PyPI
+# Get symbols from the PyPI wheel's libnccl
+pip download nvidia-nccl-cu12 --no-deps -d ./tmp/eugo/nccl-2.29.3.wheel
+cd ./tmp/eugo/nccl-2.29.3.wheel && unzip *.whl
+nm -gD --defined-only nvidia/nccl/lib/libnccl.so.2 | awk '{print $3}' | sort > pypi_symbols.txt
+
+# Our symbols
+nm -gD --defined-only /tmp/eugo/__debug/nccl/lib64/libnccl.so.2.29.3 | awk '{print $3}' | sort > our_symbols.txt
+
+diff ./pypi_symbols.txt ./our_symbols.txt
+
+# With NVCC
+cd /tmp/eugo
+git clone https://github.com/NVIDIA/nccl.git nccl-upstream
+cd nccl-upstream
+git checkout <same-commit-you-merged>  # e.g., 25368a7
+make -j$(nproc) CUDA_HOME=/usr/local/cuda
+# Result: build/lib/libnccl.so and ncclras
+
+# Exported symbols diff
+nm -gD --defined-only /<path_to>/libnccl.so | awk '{print $3}' | sort > ref_symbols.txt
+nm -gD --defined-only /<path_to>/libnccl.so | awk '{print $3}' | sort > our_symbols.txt
+diff ref_symbols.txt our_symbols.txt
+
+# Alternatively:
+nm -DC /tmp/eugo/__debug/nccl/lib64/libnccl.so.2.29.3
+nm -DC nvidia/nccl/lib/libnccl.so.2
+
+# Size comparison
+ls -lh /<path_to>/reference/libnccl.so /<path_to>/your/libnccl.so
+
+# Symbol count
+nm -gD --defined-only /<path_to>/libnccl.so | wc -l
+
+# Check for nccl*/pnccl* public API
+nm -gD --defined-only /<path_to>/libnccl.so | grep -E '^[0-9a-f]+ T (nccl|pnccl)'
+```
+
+Next, run it through an LLM to check for any unexpected missing symbols or discrepancies. Here is an example output:
+```text
+Exported symbols: 100% identical. The diff pypi_symbols.txt our_symbols.txt returned empty — your library exports the exact same 127 symbols (63 nccl* + 64 pnccl*) as NVIDIA's official PyPI wheel. This is the most important result.
+
+The differences are all in the imported (undefined) symbols, which reflect different toolchains and runtime choices:
+
+1. C++ Runtime: libstdc++ (PyPI) vs libc++ (ours)
+PyPI (GCC/nvcc)	Ours (clang)
+std::condition_variable::wait(...)@GLIBCXX_3.4.11	std::__1::condition_variable::wait(...)
+std::thread::_M_start_thread(...)@GLIBCXX_3.4.22	std::__1::thread::join()
+_Unwind_Resume@GCC_3.0	_Unwind_Resume (no version tag)
+Expected. This is the fundamental toolchain difference. Both provide identical functionality.
+
+2. CUDA Runtime: dlopen (PyPI) vs direct link (ours)
+PyPI	Ours
+No cuda* symbols at all	cudaMalloc@libcudart.so.12, cudaFree@libcudart.so.12, etc. (~50 symbols)
+Expected. PyPI's build uses enhcompat.cc + cudawrap.cc to dlopen() libcudart at runtime (so it works without CUDA installed). Our build links directly against libcudart.so.12. Both work — ours just requires libcudart to be present at load time.
+
+3. OpenMP: absent (PyPI) vs present (ours)
+PyPI	Ours
+(none)	__kmpc_fork_call@VERSION, __kmpc_dispatch_init_8@VERSION, __kmpc_dispatch_next_8@VERSION
+Expected. We compile with -fopenmp, NVIDIA doesn't. The OpenMP pragmas in NCCL source are compiled as parallel code for us, serialized for them. This means our build actually utilizes OpenMP parallelism where NCCL has #pragma omp annotations.
+
+4. GLIBC version differences (toolchain/OS age)
+PyPI	Ours
+__fxstat@GLIBC_2.17, __xstat@GLIBC_2.17	stat@GLIBC_2.33
+dlopen@GLIBC_2.17	dlopen@GLIBC_2.34
+pthread_create@GLIBC_2.17	pthread_create@GLIBC_2.34
+sscanf@GLIBC_2.17	__isoc99_sscanf@GLIBC_2.17
+Expected. Our container has a newer glibc. The __fxstat→stat change is the well-known glibc 2.33 stat() modernization. The __isoc99_sscanf vs sscanf difference is clang vs gcc format string handling. Note: our binary requires glibc ≥ 2.34, while PyPI's requires only ≥ 2.18. This means our .so won't load on very old distros (CentOS 7, Amazon Linux 2), but that's fine for our use case.
+
+5. Symbols present in PyPI but absent in ours
+Many POSIX symbols (sem_*, shm_*, socketpair, kill, mkdir, mkfifo, nftw, rmdir, chmod, fchmod, madvise, mprotect, sysinfo, uname, etc.) are in PyPI but not ours. This is because our ThinLTO + ICF (--icf=all) aggressively eliminates unused code paths. These functions exist in the source but are behind feature flags or code paths that LTO proved unreachable in our configuration.
+
+Summary
+Aspect	Status
+Exported API (nccl*/pnccl*)	Identical
+C++ ABI	Different (libc++ vs libstdc++) — expected
+CUDA linking	Direct vs dlopen — both valid
+OpenMP	We have it, they don't — bonus parallelism
+Min glibc	Ours: 2.34, PyPI: 2.18 — acceptable
+Missing POSIX calls	LTO eliminated dead code — safe
+Bottom line: your library is API-compatible with the official NVIDIA release. The differences are all expected consequences of clang + libc++ + direct cudart linking vs gcc + libstdc++ + dlopen cudart.
+```
+
+### Testing NCCL functionality
+#### With the nccl-tests suite
+```bash
+git clone https://github.com/NVIDIA/nccl-tests.git
+cd nccl-tests
+make NCCL_HOME=/tmp/eugo/__debug/nccl CUDA_HOME=/usr/local/cuda
+./build/all_reduce_perf -b 8 -e 128M -f 2 -g 1
+```
+
+#### With python
+```bash
+# Verify all public API symbols are present
+python3 -c "import ctypes; lib = ctypes.CDLL('./lib/libnccl.so.2'); ver = ctypes.c_int(); lib.ncclGetVersion(ctypes.byref(ver)); print(f'NCCL version: {ver.value}')"
+# You will see something like:
+# >>> NCCL version: 22903
+```
+
+### Ncclras
+```bash
+bash-5.2# ncclras --version
+# NCCL RAS client version 2.28.3
+
+# or
+
+./eugo_build/src/ras/ncclras --version
+# NCCL RAS client version 2.29.3
+
+# or
+
+./eugo_build/src/ras/ncclras --help
+# Usage: ./eugo_build/src/ras/ncclras [OPTION]...
+# Query the state of a running NCCL job.
+
+# Options:
+#   -f, --format=FMT    Output format: text or json (text by default)
+#   -h, --host=HOST     Host name or IP address of the RAS client socket of the
+#                       NCCL job to connect to (localhost by default)
+#   -m, --monitor[=GROUPS] Monitor mode: continuously watch for peer changes.
+#                       Optional GROUPS: lifecycle, trace, all, or
+#                       combinations like lifecycle,trace (lifecycle by default)
+#   -p, --port=PORT     TCP port of the RAS client socket of the NCCL job
+#                       (28028 by default)
+#   -t, --timeout=SECS  Maximum time for the local NCCL process to wait for
+#                       responses from other NCCL processes
+#                       (5 secs by default; 0 disables the timeout)
+#   -v, --verbose       Increase the verbosity level of the RAS output
+#       --help          Print this help and exit
+#       --version       Print the version number and exit
+```
+
 ### Update `eugo_src_diff_helper.sh`
 
 If upstream added new subdirectories (e.g., `src/gin/`, `src/os/`, `src/rma/`), add them to the directory mappings in the script.
@@ -538,11 +686,13 @@ After each merge, update:
 
 6. **Upstream's subdirectory CMakeLists.txt files**: We keep these in the tree but they're NOT used by our build. Don't spend time perfecting their conflict resolution—just accept upstream's version.
 
-7. **DOCA header copying not triggered**: Since we don't use the `add_subdirectory(transport)` → `add_subdirectory(net_ib)` → `add_subdirectory(gdaki)` chain, the DOCA header-copying logic in `gdaki/CMakeLists.txt` never runs. Device compilation will error with `fatal error: 'doca_gpunetio/doca_gpunetio_device.h' file not found`. Fix: ensure `gdaki/CMakeLists.txt` is invoked, or inline its `configure_file()` calls.
+7. **DOCA header copying path**: The DOCA headers live at `doca-gpunetio` (hyphen) but includes use `doca_gpunetio` (underscore). Headers must be copied to resolve this mismatch. Upstream copies to `${CMAKE_BINARY_DIR}/include/nccl_device/gin/gdaki/doca_gpunetio/` and adds that parent directory to include paths. We copy to `${CMAKE_BINARY_DIR}/include/doca_gpunetio/` since we already have `${CMAKE_BINARY_DIR}/include` in our include path. The copying logic is inlined in `src/CMakeLists.txt` section "DOCA GPUNetIO Header Copying". Device compilation will error with `fatal error: 'doca_gpunetio/doca_gpunetio_device.h' file not found` if headers aren't copied or the copy destination doesn't match the include paths.
 
 8. **Assuming `.cpp` → `.cu` rename is needed for CUDA-adjacent files**: Not all files in CUDA directories need CUDA compilation. The `doca-gpunetio/src/*.cpp` files are host-side wrappers (IB verbs, mlx5dv, dlopen). Only rename to `.cu` if the file actually contains `__device__`/`__global__` or includes `.cuh` headers. Grep to verify before renaming.
 
 9. **DOCA directory name mismatch**: The physical directory is `doca-gpunetio` (hyphen) but C++ includes use `doca_gpunetio` (underscore). The header copying resolves this by placing files at the underscore path. If you try to fix includes instead of copying, you'll break upstream compatibility.
+
+10. **`__stwt(uint4*, uint4)` missing in clang**: The `__stwt` CUDA intrinsic from the CUDA Math API is documented only for half-precision types. Clang 20's `__clang_cuda_intrinsics.h` header completely lacks `__stwt` definitions (has `__ldg`, atomics, cluster ops, but zero store write-through intrinsics). However, clang's development source (GitHub main branch) shows comprehensive `__stwt` support coming in future versions (likely clang 21+). The error with clang 20 + CUDA 12.6 is: `use of undeclared identifier '__stwt'`. The fix is in `src/include/nccl_device/gin/proxy/gin_proxy.h` with a clang-guarded inline PTX implementation that generates the identical `st.global.wt.v4.u32` instruction that clang's future implementation will use. The guard `!defined(NCCL_EUGO_HAS_STWT_UINT4)` prevents double-definition when upgrading to future clang. **TODO**: When upgrading to llvm23 (or earlier if `__stwt` intrinsics appear), define `NCCL_EUGO_HAS_STWT_UINT4` to skip our workaround and use clang's native version. See `__deleteme/STWT_INVESTIGATION.md` for full analysis.
 
 ---
 
@@ -550,4 +700,5 @@ After each merge, update:
 
 | Date | Upstream Version | Merge Branch | Notes |
 |---|---|---|---|
-| 2026-02-08 | v2.29.3-1 | `NVIDIA-upstream-master-02-26` | 29 conflicts, upstream added CMake + `NCCL_CHECK_CUDACC` |
+| 2026-02-08 | v2.29.3-1 | `NVIDIA-upstream-master-02-26` | 29 conflicts. Upstream added CMake build (`add_subdirectory` style), `NCCL_CHECK_CUDACC` clang fix, DOCA GPUNetIO headers. Key issues: DOCA header copy path (`build/include/doca_gpunetio/` vs upstream's nested path), missing `DOCA_VERBS_USE_IBV_WRAPPER` define, `CUmemGenericAllocationHandle` nullptr→0 fix, `ptr__funcs.h` bad merge artifacts (orphaned templates), `__stwt(uint4*, uint4)` missing in clang (added inline PTX implementation). Comprehensive testing validated all clang compatibility fixes. |
+

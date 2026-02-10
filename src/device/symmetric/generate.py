@@ -17,7 +17,7 @@ if os.path.exists(gensrc):
         elif os.path.isdir(path):
             shutil.rmtree(path)
 else:
-    os.mkdir(gensrc)
+    os.makedirs(gensrc, exist_ok=True)
 
 
 def paste(sep, *args):

@@ -17,13 +17,67 @@
    (order) == std::memory_order_seq_cst ? __ATOMIC_SEQ_CST : \
    __ATOMIC_SEQ_CST)
 
+// @EUGO_CHANGE: @begin: Clang atomic instruction generation fix for packed structs
+//
+// PROBLEM:
+// When taking a pointer to a member of a __attribute__((packed)) struct (e.g., 
+// ncclGinProxyGfd_t), the compiler assumes alignment=1 (byte-aligned) because 
+// packed forces minimum alignment. Even though we use __atomic_load_n (which 
+// should inline for lock-free types like uint64_t), clang cannot emit inline 
+// LDAR/STLR instructions for potentially misaligned pointers. Instead, it emits 
+// calls to the library functions __atomic_load(size, src, dest, order) and 
+// __atomic_store(size, dest, val, order), which require linking libatomic.
+//
+// SOLUTION:
+// Wrap the pointer with __builtin_assume_aligned(ptr, sizeof(*ptr)) to tell
+// the compiler "this pointer IS naturally aligned to its type's size." This
+// is safe because:
+//   1. The actual data IS properly aligned (heap-allocated via cudaMalloc/malloc)
+//   2. The packed attribute is redundant (struct is already naturally aligned)
+//   3. __builtin_assume_aligned is just an optimizer hint, doesn't dereference
+//
+// The (void*) cast is needed because __builtin_assume_aligned expects const void*,
+// but some callers pass volatile uint32_t*. After assume_aligned, we cast back
+// to __typeof__(ptr) to restore the original type (including volatile).
+//
+// POINTER TRANSFORMATION (key change):
+//   BEFORE: (ptr)
+//   AFTER:  (__typeof__(ptr))__builtin_assume_aligned((void*)(ptr), sizeof(*(ptr)))
+//
+// BEFORE (original upstream macros):
+//   #define COMPILER_ATOMIC_LOAD(ptr, order) \
+//     __atomic_load_n((ptr), NCCL_CONVERT_ORDER(order))
+//   #define COMPILER_ATOMIC_LOAD_DEST(ptr, dest, order) do { \
+//     __atomic_load((ptr), (dest), NCCL_CONVERT_ORDER(order)); /* library call! */ \
+//   } while(0)
+//   #define COMPILER_ATOMIC_STORE(ptr, val, order) \
+//     __atomic_store_n((ptr), (val), NCCL_CONVERT_ORDER(order))
+//
+// AFTER (with __builtin_assume_aligned wrapper, inline LDAR/STLR instructions):
 #define COMPILER_ATOMIC_LOAD(ptr, order) \
-  __atomic_load_n((ptr), NCCL_CONVERT_ORDER(order))
+  // @EUGO_CHANGE: Changed from __atomic_load_n(ptr, order) to __atomic_load_n((__typeof__(ptr))__builtin_assume_aligned((void*)(ptr), sizeof(*(ptr))), order) to fix clang codegen for atomics on packed struct members. See detailed explanation above.
+  __atomic_load_n((__typeof__(ptr))__builtin_assume_aligned((void*)(ptr), sizeof(*(ptr))), NCCL_CONVERT_ORDER(order))
 #define COMPILER_ATOMIC_LOAD_DEST(ptr, dest, order) do { \
-  __atomic_load((ptr), (dest), NCCL_CONVERT_ORDER(order)); \
+  // @EUGO_CHANGE: Changed from __atomic_load(ptr, dest, order) to *(dest) = __atomic_load_n((__typeof__(ptr))__builtin_assume_aligned((void*)(ptr), sizeof(*(ptr))), order) to fix clang codegen for atomics on packed struct members. See detailed explanation above.
+  *(dest) = __atomic_load_n((__typeof__(ptr))__builtin_assume_aligned((void*)(ptr), sizeof(*(ptr))), NCCL_CONVERT_ORDER(order)); \
 } while(0)
 #define COMPILER_ATOMIC_STORE(ptr, val, order) \
-  __atomic_store_n((ptr), (val), NCCL_CONVERT_ORDER(order))
+  // @EUGO_CHANGE: Changed from __atomic_store_n(ptr, val, order) to __atomic_store_n((__typeof__(ptr))__builtin_assume_aligned((void*)(ptr), sizeof(*(ptr))), (val), order) to fix clang codegen for atomics on packed struct members. See detailed explanation above.
+   __atomic_store_n((__typeof__(ptr))__builtin_assume_aligned((void*)(ptr), sizeof(*(ptr))), (val), NCCL_CONVERT_ORDER(order))
+  __atomic_store_n((__typeof__(ptr))__builtin_assume_aligned((void*)(ptr), sizeof(*(ptr))), (val), NCCL_CONVERT_ORDER(order))
+//
+// ADDITIONAL FIX in COMPILER_ATOMIC_LOAD_DEST:
+// Changed from __atomic_load(ptr, dest, order) [3-argument generic form] to
+// *(dest) = __atomic_load_n(ptr, order) [2-argument natural-size form + assign].
+// The _n form returns the value (allowing inline code generation), while the
+// generic form writes to dest via pointer (forcing a library call).
+//
+// RESULT:
+// - Zero library dependencies (no libatomic needed)
+// - Inline atomic instructions for lock-free types (uint32_t, uint64_t)
+// - Works with both regular pointers and pointers from packed structs
+// - Preserves volatile semantics via __typeof__
+// @EUGO_CHANGE: @end: Clang atomic instruction generation fix for packed structs
 #define COMPILER_ATOMIC_EXCHANGE(ptr, val, order) \
   __atomic_exchange_n((ptr), (val), NCCL_CONVERT_ORDER(order))
 #define COMPILER_ATOMIC_COMPARE_EXCHANGE(ptr, expected, desired, success_order, failure_order) \

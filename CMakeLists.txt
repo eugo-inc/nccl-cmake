@@ -40,16 +40,6 @@ set(ENV{NCCL_USE_CMAKE} "1")
 set(NCCL_VERSION "${NCCL_MAJOR}.${NCCL_MINOR}.${NCCL_PATCH}")
 # === @end: Reading version dynamically (from the file) ===
 
-# Detect OS
-if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    set(NCCL_OS_WINDOWS ON)
-    add_definitions(-DNCCL_OS_WINDOWS)
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set(NCCL_OS_LINUX ON)
-    add_definitions(-DNCCL_OS_LINUX)
-else()
-    message(FATAL_ERROR "Unsupported OS: ${CMAKE_SYSTEM_NAME}")
-endif()
 
 # === @begin: General Configuration ===
 # Unset CMAKE_CUDA_FLAGS to fix CMake bugs in detecting the CUDA toolchain
@@ -71,6 +61,11 @@ project(nccl
 set(CMAKE_CUDA_FLAGS
   " $ENV{CUDAFLAGS}"
 )
+
+# @EUGO_CHANGE: we only support Linux so need to detect OS
+# Detect OS
+set(NCCL_OS_LINUX ON)
+add_definitions(-DNCCL_OS_LINUX)
 
 # @EUGO_CHANGE:
 # Disabled as we prefer to control warnings by using our global / shared flags.
@@ -272,9 +267,9 @@ add_subdirectory(ext-env/example)
 # === @end: ext-env/ @NVIDIA_ORIGINAL: @end ===
 
 # === @begin: DOCA Definitions / @NVIDIA_ORIGINAL: @begin: ===
-add_definitions(-DDOCA_VERBS_USE_CUDA_WRAPPER)
-add_definitions(-DDOCA_VERBS_USE_NET_WRAPPER)
-add_definitions(-DNCCL_GIN_PROXY_ENABLE=1)
+# @EUGO_CHANGE: DOCA defines moved to target_compile_definitions() in src/CMakeLists.txt
+# to ensure they propagate to clang-scan-deps. See src/CMakeLists.txt for the actual defines:
+#   DOCA_VERBS_USE_CUDA_WRAPPER, DOCA_VERBS_USE_NET_WRAPPER, DOCA_VERBS_USE_IBV_WRAPPER, NCCL_GIN_PROXY_ENABLE
 # === @end: DOCA Definitions / @NVIDIA_ORIGINAL: @end ===
 
 
