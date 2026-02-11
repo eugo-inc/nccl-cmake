@@ -13,6 +13,18 @@ configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in
     ${CONFIGURED_HEADERS_DIR}/nccl.h
 )
+# @NVIDIA_ORIGINAL: @begin: (upstream uses sed instead of configure_file)
+# add_custom_command(
+#     OUTPUT ${CMAKE_BINARY_DIR}/include/nccl.h
+#     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/include
+#     COMMAND sed -e "s/\\$$\\{nccl:Major\\}/${NCCL_MAJOR}/g"
+#                 -e "s/\\$$\\{nccl:Minor\\}/${NCCL_MINOR}/g"
+#                 -e "s/\\$$\\{nccl:Patch\\}/${NCCL_PATCH}/g"
+#                 -e "s/\\$$\\{nccl:Suffix\\}/${NCCL_SUFFIX}/g"
+#                 -e "s/\\$$\\{nccl:Version\\}/${NCCL_VERSION_CODE}/g"
+#                 ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in > ${CMAKE_BINARY_DIR}/include/nccl.h
+# )
+# @NVIDIA_ORIGINAL: @end
 # NOTE: this is the NVIDIA_ORIGINAL and just for documentation purposes.
 # We can't place this in `nccl.h.in` file b/c it causes errors, so leaving it here for reference
 # #define NCCL_MAJOR ${nccl:Major}
@@ -93,7 +105,51 @@ endforeach()
 # === @end: DOCA GPUNetIO Header Copying ===
 
 
+# === @begin: Upstream Device Header Copying ===
+# @NVIDIA_ORIGINAL: @begin: (upstream copies ALL device headers to build dir)
+# @EUGO_CHANGE: We only copy DOCA headers (above). Upstream copies all nccl_device
+# headers and nccl_device.h to the build directory for out-of-tree consumers.
+#
+# file(GLOB_RECURSE SRC_DEVICE_HEADERS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
+#     ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device/*.h)
+#
+# foreach(HEADER_FILE ${SRC_DEVICE_HEADERS})
+#     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${HEADER_FILE}
+#         ${CMAKE_BINARY_DIR}/${HEADER_FILE} COPYONLY)
+#     list(APPEND DEVICE_HEADERS ${CMAKE_BINARY_DIR}/${HEADER_FILE})
+# endforeach()
+#
+# configure_file(${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device.h
+#     ${CMAKE_BINARY_DIR}/include/nccl_device.h COPYONLY)
+# @NVIDIA_ORIGINAL: @end
+# === @end: Upstream Device Header Copying ===
+
+
 # === @begin: `libnccl` library ===
+# @NVIDIA_ORIGINAL: @begin: (upstream source collection pattern)
+# @EUGO_CHANGE: Upstream uses add_subdirectory() + PARENT_SCOPE variables to collect
+# sources from each subdirectory (TRANSPORT_SOURCES, MISC_SOURCES, etc.). We use a flat
+# source list (NCCL_SRC_FILES) in this file instead — see AGENTS.md Rule R3.
+#
+# add_subdirectory(transport)
+# add_subdirectory(misc)
+# add_subdirectory(register)
+# add_subdirectory(graph)
+# add_subdirectory(plugin)
+# add_subdirectory(device)
+# add_subdirectory(nccl_device)
+# add_subdirectory(ras)
+# add_subdirectory(scheduler)
+# add_subdirectory(os)
+# add_subdirectory(gin)
+# add_subdirectory(rma)
+#
+# list(APPEND LIBSRCFILES
+#     ${TRANSPORT_SOURCES} ${MISC_SOURCES} ${REGISTER_SOURCES} ${GRAPH_SOURCES}
+#     ${PLUGIN_SOURCES} ${RAS_SOURCES} ${SYM_SOURCES} ${SCHEDULER_SOURCES}
+#     ${OS_SOURCES} ${GIN_SOURCES} ${DOCA_SOURCES} ${RMA_SOURCES}
+# )
+# @NVIDIA_ORIGINAL: @end
 set(NCCL_SRC_FILES
     # === @begin: ./ (`@/src/CMakeLists.txt`) ===
     allocator.cc
@@ -292,6 +348,11 @@ set(NCCL_SRC_FILES
     # === @end: ./rma/ (`@/src/rma/CMakeLists.txt`) ===
 )
 
+# @NVIDIA_ORIGINAL: @begin: (upstream macro prefix map)
+# @EUGO_CHANGE: Not currently used in our build. Strips source path from __FILE__ macros.
+# add_compile_options(-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=)
+# @NVIDIA_ORIGINAL: @end
+
 add_library(nccl SHARED ${NCCL_SRC_FILES})
 
 # Ensure git_version.h is generated before compiling
@@ -328,11 +389,17 @@ target_compile_definitions(
 
 
 # `WHOLE_ARCHIVE` is needed as `nccl_colldevice` is a static library and we want to get all its symbols!
+# @NVIDIA_ORIGINAL: target_link_libraries(nccl PRIVATE nccl_device ...)
+# @EUGO_CHANGE: Upstream uses `nccl_device` target name. We use `nccl_colldevice`
+# (defined in src/device/CMakeLists.txt) with WHOLE_ARCHIVE.
 target_link_libraries(nccl PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,nccl_colldevice>")
 
 
 # @Important:
 # We couldn't use `NCCL_DEPENDENCIES` list here, as `cudart` is used in `nccl` interface while `cccl` is a header-only library only used as an implementation detail, so they must go into different section to avoid breaking downstream packages build failures or runtime UB!
+# @NVIDIA_ORIGINAL: target_link_libraries(nccl PRIVATE nccl_device pthread rt dl ${CUDAToolkit_LIBRARIES} ${EXTRA_LIBS})
+# @EUGO_CHANGE: We use CMake imported targets instead of raw library names.
+# pthread/rt/dl are merged into glibc on modern systems (see root CMakeLists.txt).
 target_link_libraries(
     nccl
     PRIVATE CCCL::libcudacxx
@@ -382,6 +449,75 @@ set(NCCL_PUBLIC_HEADERS
 # === @end: `libnccl` library ===
 
 
+# === @begin: `nccl_static` library ===
+# @NVIDIA_ORIGINAL: @begin: (upstream static library target)
+# @EUGO_CHANGE: Static library not built in Eugo environment, but preserved for reference.
+#
+# add_library(nccl_static STATIC ${LIBSRCFILES})
+#
+# target_include_directories(nccl_static PUBLIC
+#     ${CMAKE_CURRENT_SOURCE_DIR}/device
+#     ${CMAKE_CURRENT_SOURCE_DIR}/include
+#     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
+#     ${CMAKE_CURRENT_SOURCE_DIR}/include/os
+#     ${CUDAToolkit_INCLUDE_DIRS}
+#     transport/net_ib/gdaki/doca-gpunetio/include
+#     ${CUDAToolkit_INCLUDE_DIRS}/cccl
+# )
+#
+# add_dependencies(nccl_static nccl_header)
+# add_dependencies(nccl_static generate_git_version)
+#
+# target_link_libraries(nccl_static
+#     PRIVATE
+#     nccl_device
+#     pthread
+#     rt
+#     dl
+#     ${CUDAToolkit_LIBRARIES}
+#     ${EXTRA_LIBS}
+# )
+#
+# set_target_properties(nccl_static PROPERTIES
+#     CUDA_SEPARABLE_COMPILATION ON
+#     CUDA_RESOLVE_DEVICE_SYMBOLS ON
+#     CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+#     POSITION_INDEPENDENT_CODE ON
+# )
+#
+# set_target_properties(nccl_static PROPERTIES
+#     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+# )
+# @NVIDIA_ORIGINAL: @end
+# === @end: `nccl_static` library ===
+
+
 # === @begin: ras/ ===
+# @NVIDIA_ORIGINAL: @begin: (upstream defines ncclras inline in src/CMakeLists.txt)
+# @EUGO_CHANGE: We use add_subdirectory(ras) which has its own CMakeLists.txt.
+# Upstream's inline definition is preserved here for reference.
+#
+# set(RAS_BINSRCFILES ras/client.cc)
+#
+# add_executable(ncclras ${RAS_BINSRCFILES})
+#
+# target_include_directories(ncclras PUBLIC
+#     ${CMAKE_BINARY_DIR}/include
+#     ${CUDAToolkit_INCLUDE_DIRS}
+# )
+#
+# add_dependencies(ncclras nccl_header)
+#
+# target_link_libraries(ncclras
+#     PRIVATE
+#     pthread
+#     rt
+#     dl
+# )
+#
+# set_target_properties(ncclras PROPERTIES
+#     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+# )
+# @NVIDIA_ORIGINAL: @end
 add_subdirectory(ras)
 # === @end: ras/ ===

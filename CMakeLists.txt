@@ -79,6 +79,10 @@ add_definitions(-DNCCL_OS_LINUX)
 
 
 # === @begin: Warnings Configuration ===
+# @NVIDIA_ORIGINAL: @begin: (upstream compiler flags - nvcc-specific, not compatible with clang)
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden -Wall -Wno-unused-function -Wno-sign-compare -Wvla -g")
+# set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all -fPIC")
+# @NVIDIA_ORIGINAL: @end
 set(
     EUGO_COMMON_WARNING_FLAGS
     "-Wno-deprecated-this-capture \
@@ -95,7 +99,34 @@ set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS} -O3")
 # === @end: Warnings Configuration ===
 
 
-# === @begin: Options ===
+# === @begin: Build Options ===
+# @NVIDIA_ORIGINAL: @begin: (upstream uses option() calls)
+# option(BUILD_DEBIAN_PACKAGE "Build Debian package" OFF)
+# option(BUILD_REDHAT_PACKAGE "Build Redhat package" OFF)
+# option(BUILD_TXZ_PACKAGE "Build TXZ package" OFF)
+# option(BUILD_CONDA_PACKAGE "Build Conda package" OFF)
+# option(BUILD_SRCTXZ_PACKAGE "Build source tarball package" OFF)
+# option(BUILD_DOC_PACKAGE "Build documentation package" OFF)
+# option(BUILD_PACKAGES "Build all packages" OFF)
+# option(VERBOSE "Enable verbose output" OFF)
+# option(KEEP "Keep intermediate files" OFF)
+# option(DEBUG "Enable debug build" OFF)
+# option(ASAN "Enable Address Sanitizer" OFF)
+# option(UBSAN "Enable Undefined Behavior Sanitizer" OFF)
+# option(TRACE "Enable tracing" OFF)
+# option(WERROR "Treat warnings as errors" OFF)
+# option(PROFAPI "Enable profiling API" ON)
+# option(NVTX "Enable NVTX" ON)
+# option(RDMA_CORE "Enable RDMA core" OFF)
+# option(NET_PROFILER "Enable network profiler" OFF)
+# option(MLX5DV "Enable MLX5DV" OFF)
+# option(MAX_EXT_NET_PLUGINS "Maximum external network plugins" 0)
+# option(EMIT_LLVM_IR "Generate LLVM IR for device APIs" OFF)
+# @NVIDIA_ORIGINAL: @end
+#
+# @EUGO_CHANGE: We use a flat compile definitions list for the subset of options
+# that map to C/C++ macros. Options without corresponding macros (packaging, sanitizers,
+# verbosity) are in the upstream option() block above for reference only.
 set(NCCL_COMMON_COMPILE_DEFINITIONS
     # BUILD_DEBIAN_PACKAGE=OFF # Build Debian package
     # BUILD_REDHAT_PACKAGE=OFF # Build Redhat package
@@ -162,22 +193,12 @@ set(NCCL_COMMON_COMPILE_DEFINITIONS
 # if(BUILD_SRCTXZ_PACKAGE OR BUILD_PACKAGES)
 # add_subdirectory(pkg/srctxz)
 # endif()
-
-# if(BUILD_DOC_PACKAGE OR BUILD_PACKAGES)
-# add_subdirectory(pkg/doc)
-# endif()
-
-if(EMIT_LLVM_IR)
-    add_subdirectory(ir)
-    add_dependencies(llvm_ir nccl_header)
-    add_custom_target(nccl_with_ir ALL DEPENDS nccl llvm_ir)
-    message(STATUS "LLVM IR generation will be included in default build")
-endif()
+# @NVIDIA_ORIGINAL: @end
 
 if(EMIT_LLVM_IR)
     add_definitions(-DEMIT_LLVM_IR=1)
 endif()
-# === @end:Options conditionals ===
+# === @end: Option Conditionals ===
 
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -193,13 +214,62 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS} -O0 -G -g")
     )
 endif()
-# === @end: Options ===
+# === @end: Build Options ===
 
 
 # === @begin: dependencies/ ===
 # === @@begin: CUDAToolkit ===
 find_package(CUDAToolkit REQUIRED)
 message(STATUS "[EUGO]: Find CUDAToolkit: ${CUDAToolkit_CONFIG}")
+
+# @NVIDIA_ORIGINAL: @begin: (upstream CUDA version detection)
+# @EUGO_CHANGE: Upstream extracts CUDA_MAJOR/CUDA_MINOR from CUDAToolkit_VERSION string
+# and uses them as global compile definitions. We instead use CMake's
+# CUDAToolkit_VERSION_MAJOR/CUDAToolkit_VERSION_MINOR (set automatically by find_package)
+# as PRIVATE target_compile_definitions in src/CMakeLists.txt.
+#
+# string(REGEX MATCH "([0-9]+\\.[0-9]+)" CUDA_VERSION "${CUDAToolkit_VERSION}")
+# string(REGEX MATCH "([0-9]+)" CUDA_MAJOR "${CUDA_VERSION}")
+# string(REGEX REPLACE ".*\\.([0-9]+)$" "\\1" CUDA_MINOR "${CUDA_VERSION}")
+#
+# add_compile_definitions(
+#     CUDA_MAJOR=${CUDA_MAJOR}
+#     CUDA_MINOR=${CUDA_MINOR}
+# )
+# @NVIDIA_ORIGINAL: @end
+
+# @NVIDIA_ORIGINAL: @begin: (upstream CUDA architecture auto-detection)
+# @EUGO_CHANGE: We set CMAKE_CUDA_ARCHITECTURES externally via toolchain file or
+# command-line (-DCMAKE_CUDA_ARCHITECTURES=...) so this auto-detection is not needed.
+#
+# if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "")
+#     message(STATUS "CMAKE_CUDA_ARCHITECTURES not defined, setting defaults based on CUDA version")
+#     if(${CUDA_MAJOR} LESS 9)
+#         set(CMAKE_CUDA_ARCHITECTURES "35;50;60;61")
+#     elseif(${CUDA_MAJOR} EQUAL 9)
+#         set(CMAKE_CUDA_ARCHITECTURES "35;50;60;61;70")
+#     elseif(${CUDA_MAJOR} EQUAL 10)
+#         set(CMAKE_CUDA_ARCHITECTURES "35;50;60;61;70")
+#     elseif(${CUDA_MAJOR} EQUAL 11)
+#         if(${CUDA_MINOR} LESS 8)
+#             set(CMAKE_CUDA_ARCHITECTURES "35;50;60;61;70;80")
+#         else()
+#             set(CMAKE_CUDA_ARCHITECTURES "35;50;60;61;70;80;90")
+#         endif()
+#     elseif(${CUDA_MAJOR} EQUAL 12)
+#         if(${CUDA_MINOR} LESS 8)
+#             set(CMAKE_CUDA_ARCHITECTURES "50;60;61;70;80;90")
+#         else()
+#             set(CMAKE_CUDA_ARCHITECTURES "50;60;61;70;80;90;100;120")
+#         endif()
+#     elseif(${CUDA_MAJOR} EQUAL 13)
+#         set(CMAKE_CUDA_ARCHITECTURES "50;60;61;70;80;90;100;110;120")
+#     else()
+#         set(CMAKE_CUDA_ARCHITECTURES "50;60;61;70;80;90;100;110;120")
+#     endif()
+# endif()
+# message(STATUS "Using CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
+# @NVIDIA_ORIGINAL: @end
 # === @@end: CUDAToolkit ===
 
 
@@ -222,6 +292,57 @@ message(STATUS "[EUGO]: CCCL found: ${cccl_CONFIG}")
 # option(RDMA_CORE "Enable RDMA core" OFF) # Sets `NCCL_BUILD_RDMA_CORE=1` macro and links `libibverbs` (`native/rdma_core`)
 # option(MLX5DV "Enable MLX5DV" OFF) # Sets `NCCL_BUILD_MLX5DV=1` macro and links `libmlx5` (`native/rdma_core`)
 # === @@end: Discarded dependencies ===
+# === @@begin: Sanitizer Options ===
+# @NVIDIA_ORIGINAL: @begin: (upstream sanitizer support)
+# @EUGO_CHANGE: Not yet supported in Eugo environment.
+#
+# if(ASAN)
+#     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
+#     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address -static-libasan")
+# endif()
+#
+# if(UBSAN)
+#     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=undefined")
+#     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=undefined -static-libubsan")
+# endif()
+# @NVIDIA_ORIGINAL: @end
+# === @@end: Sanitizer Options ===
+
+
+# === @@begin: EXTRA_LIBS and Library Dependencies ===
+# @NVIDIA_ORIGINAL: @begin: (upstream library dependencies)
+# @EUGO_CHANGE: In modern glibc, librt/libpthread/libdl are merged into libc.so.
+# We don't need to find or link them separately. RDMA_CORE and MLX5DV are not
+# used in our environment.
+#
+# set(EXTRA_LIBS)
+#
+# if(RDMA_CORE)
+#     add_definitions(-DNCCL_BUILD_RDMA_CORE=1)
+#     find_library(VERBS_LIBRARY NAMES verbs)
+#     if(VERBS_LIBRARY)
+#         list(APPEND EXTRA_LIBS ${VERBS_LIBRARY})
+#     endif()
+# endif()
+#
+# if(MLX5DV)
+#     add_definitions(-DNCCL_BUILD_MLX5DV=1)
+#     find_library(MLX5_LIBRARY NAMES mlx5)
+#     if(MLX5_LIBRARY)
+#         list(APPEND EXTRA_LIBS ${MLX5_LIBRARY})
+#     endif()
+# endif()
+#
+# if(NET_PROFILER)
+#     add_definitions(-DNCCL_ENABLE_NET_PROFILING=1)
+# endif()
+#
+# find_library(RT_LIBRARY NAMES rt)
+# if(RT_LIBRARY)
+#     list(APPEND EXTRA_LIBS ${RT_LIBRARY})
+# endif()
+# @NVIDIA_ORIGINAL: @end
+# === @@end: EXTRA_LIBS and Library Dependencies ===
 
 
 # === @@begin: Finalized dependencies list ===
@@ -264,13 +385,61 @@ add_subdirectory(ext-tuner/example)
 
 # === @begin: ext-env/ @NVIDIA_ORIGINAL: @begin: ===
 add_subdirectory(ext-env/example)
-# === @end: ext-env/ @NVIDIA_ORIGINAL: @end ===
+# === @end: Subdirectories ===
 
-# === @begin: DOCA Definitions / @NVIDIA_ORIGINAL: @begin: ===
+
+# === @begin: DOCA Definitions ===
+# @NVIDIA_ORIGINAL: @begin:
+# add_definitions(-DDOCA_VERBS_USE_CUDA_WRAPPER)
+# add_definitions(-DDOCA_VERBS_USE_NET_WRAPPER)
+# add_definitions(-DNCCL_GIN_PROXY_ENABLE=1)
+# @NVIDIA_ORIGINAL: @end
 # @EUGO_CHANGE: DOCA defines moved to target_compile_definitions() in src/CMakeLists.txt
 # to ensure they propagate to clang-scan-deps. See src/CMakeLists.txt for the actual defines:
 #   DOCA_VERBS_USE_CUDA_WRAPPER, DOCA_VERBS_USE_NET_WRAPPER, DOCA_VERBS_USE_IBV_WRAPPER, NCCL_GIN_PROXY_ENABLE
-# === @end: DOCA Definitions / @NVIDIA_ORIGINAL: @end ===
+# Note: upstream is MISSING DOCA_VERBS_USE_IBV_WRAPPER which is required for ibv wrapper to work.
+# === @end: DOCA Definitions ===
+
+
+# === @begin: Package Building ===
+# @NVIDIA_ORIGINAL: @begin: (upstream package building subdirectories)
+# @EUGO_CHANGE: Not needed in Eugo environment, but preserved for reference.
+#
+# if(BUILD_DEBIAN_PACKAGE OR BUILD_PACKAGES)
+#     add_subdirectory(pkg/debian)
+# endif()
+#
+# if(BUILD_REDHAT_PACKAGE OR BUILD_PACKAGES)
+#     add_subdirectory(pkg/redhat)
+# endif()
+#
+# if(BUILD_TXZ_PACKAGE OR BUILD_PACKAGES)
+#     add_subdirectory(pkg/txz)
+# endif()
+#
+# if(BUILD_CONDA_PACKAGE OR BUILD_PACKAGES)
+#     add_subdirectory(pkg/conda)
+# endif()
+#
+# if(BUILD_SRCTXZ_PACKAGE OR BUILD_PACKAGES)
+#     add_subdirectory(pkg/srctxz)
+# endif()
+#
+# if(BUILD_DOC_PACKAGE OR BUILD_PACKAGES)
+#     add_subdirectory(pkg/doc)
+# endif()
+# @NVIDIA_ORIGINAL: @end
+# === @end: Package Building ===
+
+
+# === @begin: EMIT_LLVM_IR ===
+if(EMIT_LLVM_IR)
+    add_subdirectory(ir)
+    add_dependencies(llvm_ir nccl_header)
+    add_custom_target(nccl_with_ir ALL DEPENDS nccl llvm_ir)
+    message(STATUS "LLVM IR generation will be included in default build")
+endif()
+# === @end: EMIT_LLVM_IR ===
 
 
 # === @begin: Install and Configuration Targets ===
@@ -318,5 +487,5 @@ install(
 # -- Installing: /usr/local/bin/ncclras
 # -- Installing: /usr/local/lib64/cmake/nccl/NCCLConfig.cmake
 # -- Installing: /usr/local/lib64/cmake/nccl/NCCLConfig-release.cmake
-# === @end: Install Targets ===
+# === @end: Install and Configuration Targets ===
 

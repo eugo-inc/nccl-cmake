@@ -1,4 +1,4 @@
-# # Misc sources# @EUGO_CHANGE: We moved all sources to `src/transport/CMakeLists.txt` for better modularity and maintainability. --- IGNORE ---
+# # Misc sources # @EUGO_CHANGE: We moved all sources to `src/CMakeLists.txt` (flat NCCL_SRC_FILES list). --- IGNORE ---
 # set(MISC_SOURCES
 #     ${CMAKE_CURRENT_SOURCE_DIR}/strongstream.cc
 #     ${CMAKE_CURRENT_SOURCE_DIR}/socket.cc

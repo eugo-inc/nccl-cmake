@@ -1,4 +1,4 @@
-# # RMA sources # @EUGO_CHANGE: We moved all sources to `src/transport/CMakeLists.txt` for better modularity and maintainability. --- IGNORE ---
+# # RMA sources # @EUGO_CHANGE: We moved all sources to `src/CMakeLists.txt` (flat NCCL_SRC_FILES list). --- IGNORE ---
 # set(RMA_SOURCES
 #     ${CMAKE_CURRENT_SOURCE_DIR}/rma.cc
 #     ${CMAKE_CURRENT_SOURCE_DIR}/rma_proxy.cc

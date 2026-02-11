@@ -53,8 +53,10 @@ set(COMMON_CLANG_FLAGS
     ${NCCL_INCLUDES}
     ${CUDA_INCLUDES}
     -D__clang_llvm_bitcode_lib__
-    -DCUDA_MAJOR=${CUDA_MAJOR}
-    -DCUDA_MINOR=${CUDA_MINOR}
+    # @EUGO_CHANGE: Use CUDAToolkit_VERSION_MAJOR/MINOR from find_package(CUDAToolkit)
+    # instead of upstream's CUDA_MAJOR/CUDA_MINOR which are set by their Makefile.
+    -DCUDA_MAJOR=${CUDAToolkit_VERSION_MAJOR}
+    -DCUDA_MINOR=${CUDAToolkit_VERSION_MINOR}
 )
 
 # Clang flags for LLVM IR generation

@@ -1,4 +1,4 @@
-# # Add plugin subdirectories # @EUGO_CHANGE: We moved all sources to `src/transport/CMakeLists.txt` for better modularity and maintainability. --- IGNORE ---
+# # Add plugin subdirectories # @EUGO_CHANGE: We moved all sources to `src/CMakeLists.txt` (flat NCCL_SRC_FILES list). --- IGNORE ---
 # add_subdirectory(profiler)
 # add_subdirectory(net)
 # add_subdirectory(tuner)

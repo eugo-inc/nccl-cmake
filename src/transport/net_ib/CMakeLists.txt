@@ -1,4 +1,4 @@
-# # Transport sources # @EUGO_CHANGE: We moved all transport sources to `src/CMakeLists.txt` for better modularity and maintainability. --- IGNORE ---
+# # Transport net_ib sources # @EUGO_CHANGE: We moved all sources to `src/CMakeLists.txt` (flat NCCL_SRC_FILES list). --- IGNORE ---
 # set(NET_IB_SOURCES
 #     ${CMAKE_CURRENT_SOURCE_DIR}/common.cc
 #     ${CMAKE_CURRENT_SOURCE_DIR}/connect.cc

@@ -1,4 +1,4 @@
-# # Profiler plugin sources# @EUGO_CHANGE: We moved all sources to `src/transport/CMakeLists.txt` for better modularity and maintainability. --- IGNORE ---
+# # Profiler plugin sources # @EUGO_CHANGE: We moved all sources to `src/CMakeLists.txt` (flat NCCL_SRC_FILES list). --- IGNORE ---
 # set(PLUGIN_PROFILER_SOURCES
 #     ${CMAKE_CURRENT_SOURCE_DIR}/profiler_v3.cc
 #     ${CMAKE_CURRENT_SOURCE_DIR}/profiler_v4.cc
