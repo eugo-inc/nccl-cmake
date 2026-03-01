@@ -13,8 +13,9 @@ This fork exists to build NCCL with **clang only** (no nvcc, no gcc) using **CMa
 | **R1: Clang-only compilation** | All host and device code compiles with clang. No nvcc-specific syntax, no gcc extensions that clang rejects. |
 | **R2: CMake-only build** | `CMakeLists.txt` is the source of truth. Upstream `Makefile` logic is informational only—never imported verbatim. |
 | **R3: Flat source list in `src/CMakeLists.txt`** | All library sources are listed in a single `NCCL_SRC_FILES` variable in `src/CMakeLists.txt`, organized by subdirectory comments. We do NOT use per-subdirectory `CMakeLists.txt` + `PARENT_SCOPE` for the main `libnccl`. |
-| **R4: `@EUGO_CHANGE` annotations** | Every deviation from upstream must be annotated with `# @EUGO_CHANGE:` explaining why. |
+| **R4: `@EUGO_CHANGE` / `@NVIDIA_ORIGINAL` annotations** | Every deviation from upstream must be annotated with `# @EUGO_CHANGE:` explaining why. When commenting out upstream code, prefix with `# @NVIDIA_ORIGINAL:` so the original intent is preserved for future merges. |
 | **R5: Preserve `xla_clang.patch` changes** | The patch in `xla_clang.patch` defines our clang compatibility delta. Its transformations must survive every merge. |
+| **R6: Reduce CMake options to selected path** | When upstream introduces `option()`, `set(... CACHE ...)`, or `if()`/`else()` conditional blocks, evaluate the option, pick the path we want, comment out the unused branch with `# @NVIDIA_ORIGINAL:`, and keep the selected path live. Set any associated `-D` macros via `NCCL_COMMON_COMPILE_DEFINITIONS`. See Section 5 "New CMake options from upstream" for the full procedure and examples. |
 
 ---
 
@@ -104,6 +105,12 @@ find src/device -name "*.cu.cc" | head  # should return nothing
 # Check const removal in generate.py
 grep -n 'const ncclDevFuncTable' src/device/generate.py  # should find nothing
 grep -n 'const ncclDevKernelList' src/device/generate.py  # should find nothing
+
+# 5. Compare install tree against upstream's official package layout
+# See section 8 "Comparing install tree against upstream" for full details
+tree <our_install_prefix> | sed 's|<our_install_prefix>|/usr|' | sort > our_tree.txt
+# Compare against reference tree from `dnf repoquery -l libnccl-devel`
+diff ref_tree.txt our_tree.txt
 ```
 
 ---
@@ -412,6 +419,36 @@ Watch for additions to `all_colls` in `generate.py`. These propagate to:
 - C++ source files — new enqueue paths, new transport code
 - Headers — new structs, enums
 
+### New CMake options from upstream
+
+When upstream introduces new `option(...)`, `set(... STRING CACHE ...)`, or other CMake configuration variables with `if()`/`else()` branches:
+
+1. **Evaluate**: Decide whether the option should be ON or OFF for our clang+CMake build
+2. **Reduce to selected path**: Comment out the unused branch and keep only the selected path live
+3. **Annotate**: Use `# @NVIDIA_ORIGINAL:` for commented-out upstream code and `# @EUGO_CHANGE:` to explain why
+4. **Set associated macros**: If the option controls a `-D` compile definition, set it manually via `NCCL_COMMON_COMPILE_DEFINITIONS`
+
+#### Example: Reducing an option to a single path
+
+```cmake
+# @NVIDIA_ORIGINAL: option(EMIT_LLVM_IR "Generate LLVM IR" OFF)
+# @NVIDIA_ORIGINAL: if(EMIT_LLVM_IR)
+# @EUGO_CHANGE: We always emit LLVM IR, so the option is removed and
+# the body is unconditionally included.
+add_subdirectory(ir)
+add_dependencies(llvm_ir nccl_header)
+add_custom_target(nccl_with_ir ALL DEPENDS nccl llvm_ir)
+message(STATUS "LLVM IR generation will be included in default build")
+# @NVIDIA_ORIGINAL: endif()
+```
+
+#### Example: Setting associated compile definitions
+
+```cmake
+# @EUGO_CHANGE: Upstream guards this behind an option(); we always enable it.
+list(APPEND NCCL_COMMON_COMPILE_DEFINITIONS EMIT_LLVM_IR=1)
+```
+
 ### New compile definitions
 Check upstream's root `CMakeLists.txt` and `Makefile` for new `-D` flags. Port them to our `NCCL_COMMON_COMPILE_DEFINITIONS` in `CMakeLists.txt`.
 
@@ -608,6 +645,117 @@ Min glibc	Ours: 2.34, PyPI: 2.18 — acceptable
 Missing POSIX calls	LTO eliminated dead code — safe
 Bottom line: your library is API-compatible with the official NVIDIA release. The differences are all expected consequences of clang + libc++ + direct cudart linking vs gcc + libstdc++ + dlopen cudart.
 ```
+
+### Comparing install tree against upstream
+
+In addition to comparing exported symbols, **always compare the installed file tree** against NVIDIA's official package. This catches missing headers, misplaced files, wrong directory structure, or missing binaries that symbol comparison alone won't detect.
+
+#### Get the reference tree from NVIDIA's official RPM
+
+```bash
+# On a Fedora/RHEL system with the CUDA repo configured:
+dnf repoquery -l libnccl-devel | grep -v '^\.build-id' | sort > ref_tree.txt
+
+# Or from the PyPI wheel:
+pip download nvidia-nccl-cu12 --no-deps -d ./tmp
+cd ./tmp && unzip *.whl
+find nvidia/nccl/ -type f | sed 's|^nvidia/nccl/|/usr/|' | sort > ref_tree.txt
+```
+
+Example reference tree (from `dnf repoquery -l libnccl-devel` for v2.29.x):
+```
+/usr/bin/ncclras
+/usr/include/nccl.h
+/usr/include/nccl_device.h
+/usr/include/nccl_device/barrier.h
+/usr/include/nccl_device/comm.h
+/usr/include/nccl_device/coop.h
+/usr/include/nccl_device/core.h
+/usr/include/nccl_device/gin.h
+/usr/include/nccl_device/gin/gdaki/doca_gpunetio/common/doca_gpunetio_verbs_def.h
+/usr/include/nccl_device/gin/gdaki/doca_gpunetio/common/doca_gpunetio_verbs_dev.h
+/usr/include/nccl_device/gin/gdaki/doca_gpunetio/device/doca_gpunetio_dev_verbs_common.cuh
+/usr/include/nccl_device/gin/gdaki/doca_gpunetio/device/doca_gpunetio_dev_verbs_counter.cuh
+/usr/include/nccl_device/gin/gdaki/doca_gpunetio/device/doca_gpunetio_dev_verbs_cq.cuh
+/usr/include/nccl_device/gin/gdaki/doca_gpunetio/device/doca_gpunetio_dev_verbs_onesided.cuh
+/usr/include/nccl_device/gin/gdaki/doca_gpunetio/device/doca_gpunetio_dev_verbs_qp.cuh
+/usr/include/nccl_device/gin/gdaki/doca_gpunetio/doca_gpunetio_device.h
+/usr/include/nccl_device/gin/gdaki/gin_gdaki.h
+/usr/include/nccl_device/gin/gdaki/gin_gdaki_device_host_common.h
+/usr/include/nccl_device/gin/gin_device_api.h
+/usr/include/nccl_device/gin/gin_device_common.h
+/usr/include/nccl_device/gin/gin_device_host_common.h
+/usr/include/nccl_device/gin/proxy/gin_proxy.h
+/usr/include/nccl_device/gin/proxy/gin_proxy_device_host_common.h
+/usr/include/nccl_device/gin_barrier.h
+/usr/include/nccl_device/impl/barrier__funcs.h
+/usr/include/nccl_device/impl/barrier__types.h
+/usr/include/nccl_device/impl/comm__funcs.h
+/usr/include/nccl_device/impl/comm__types.h
+/usr/include/nccl_device/impl/core__funcs.h
+/usr/include/nccl_device/impl/core__types.h
+/usr/include/nccl_device/impl/gin__funcs.h
+/usr/include/nccl_device/impl/gin__types.h
+/usr/include/nccl_device/impl/gin_barrier__funcs.h
+/usr/include/nccl_device/impl/gin_barrier__types.h
+/usr/include/nccl_device/impl/ll_a2a__funcs.h
+/usr/include/nccl_device/impl/ll_a2a__types.h
+/usr/include/nccl_device/impl/lsa_barrier__funcs.h
+/usr/include/nccl_device/impl/lsa_barrier__types.h
+/usr/include/nccl_device/impl/mem_barrier__funcs.h
+/usr/include/nccl_device/impl/mem_barrier__types.h
+/usr/include/nccl_device/impl/ptr__funcs.h
+/usr/include/nccl_device/impl/ptr__types.h
+/usr/include/nccl_device/ll_a2a.h
+/usr/include/nccl_device/lsa_barrier.h
+/usr/include/nccl_device/mem_barrier.h
+/usr/include/nccl_device/net_device.h
+/usr/include/nccl_device/ptr.h
+/usr/include/nccl_device/utility.h
+/usr/lib64/libnccl.so
+```
+
+**Note:** The reference tree above is for v2.29.x. Update it after each upstream merge — new headers and binaries appear with new features.
+
+#### Get our install tree
+
+```bash
+# After cmake --install or examining the build output:
+# Our install prefix is typically /tmp/eugo/__debug/nccl or similar
+find <our_install_prefix> -type f | sort > our_tree.txt
+
+# Normalize paths for comparison (our prefix → /usr for diff):
+sed -i 's|<our_install_prefix>|/usr|g' our_tree.txt
+# Also normalize lib64 → lib or vice versa depending on reference:
+sed -i 's|/usr/lib64/|/usr/lib/|g' our_tree.txt  # if needed
+```
+
+#### Compare the trees
+
+```bash
+diff ref_tree.txt our_tree.txt
+```
+
+#### What to check for
+
+| Issue | Impact | Fix |
+|---|---|---|
+| Missing `ncclras` binary | Deployment missing diagnostic tool | Ensure `src/ras/CMakeLists.txt` is invoked and installs the binary |
+| Missing `nccl.h` | Users can't compile against NCCL | Check `configure_file()` for `nccl.h.in` in root CMakeLists.txt |
+| Missing `nccl_device/*.h` headers | Device API users can't compile | Check `install(DIRECTORY)` for `src/include/nccl_device` |
+| Missing `nccl_device.h` | Device API umbrella header missing | Check install rules |
+| Missing DOCA `.cuh` headers | GIN/GDAKI device API broken for users | Check DOCA header copying + install rules |
+| Missing `libnccl.so` symlink | `-lnccl` linking fails | Check `install(TARGETS)` creates the symlink |
+| Extra files in our tree | Not harmful but indicates build debris | Clean up install rules |
+| Wrong directory nesting | Include paths break for downstream | Verify `install(DIRECTORY)` destinations match |
+
+#### Expected differences (acceptable)
+
+- `.build-id/` entries: RPM-specific, not present in our install — **OK**
+- `lib/` vs `lib64/`: Architecture-dependent, normalize before diffing — **OK**
+- `share/doc/` entries: RPM metadata, not present in our install — **OK**
+- `nccl_static.a`: Only in `libnccl-static` RPM; we don't build static by default — **OK**
+- `pkgconfig/nccl.pc`: May or may not be installed depending on our CMake config — verify if needed
 
 ### Testing NCCL functionality
 #### With the nccl-tests suite

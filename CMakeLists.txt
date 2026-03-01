@@ -100,6 +100,10 @@ set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS} -O3")
 
 
 # === @begin: Build Options ===
+
+# @Important:
+# In original code, most of these flags are CMake options. We reduce them to -D for ones which we use and omit others to reduce the complexity of our build as we support only 1 platform and only 1 compiler, making our life easier. Much easier.
+
 # @NVIDIA_ORIGINAL: @begin: (upstream uses option() calls)
 # option(BUILD_DEBIAN_PACKAGE "Build Debian package" OFF)
 # option(BUILD_REDHAT_PACKAGE "Build Redhat package" OFF)
@@ -165,40 +169,54 @@ set(NCCL_COMMON_COMPILE_DEFINITIONS
     # NCCL_ENABLE_NET_PROFILING=1 # "Enable network profiler"  [option: `NET_PROFILER`], disabled by default + causes building an extra plugin which isn't easy to build and maintain + all 3 shipped plugins are considered tests/examples of NCCL usage and not something NCCL really needs to operate properly.
     # NCCL_NET_MAX_PLUGINS=0 # "Maximum external network plugins" [option: `MAX_EXT_NET_PLUGINS=<int>`], this is set to `0` by default, meaning no extra plugins can be loaded, which makes sense as we're not building any of them.
 
-    EMIT_LLVM_IR=1 # Generate LLVM IR for device APIs" [option: `EMIT_LLVM_IR`], this is used in `@/ir` subdirectory to generate LLVM IR for device APIs, which is then used in `@/src/device/generate.py` and `@/src/device/symmetric/generate.py` to generate device code for supported architectures.
+    # EMIT_LLVM_IR=1 # Generate LLVM IR for device APIs" [option: `EMIT_LLVM_IR`], this is used in `@/bindings/ir/` subdirectory so it can be used by code generation packages to enable calling NCCL APIs w/o the roundtrip to the host. However, as of now we don't have such packages so we don't enable it yet.
+
+    # EUGO_NCCL_NVML_DIRECT_HEADER=1 # @TODO+: RETURN THAT PRIOR GREAT REBUILD. Eugo-specific: allows using `nvml.h` from the system but still load `libnvidia-ml` dynamically via `dlopen`. This is safe in Eugo Environment as we always have one and only one version of this library in a given version and it's better to have all APIs set for efficiency rather than not.
 )
 
 # === @begin:Options conditionals ===
+# @NVIDIA_ORIGINAL: @begin: (upstream package building subdirectories)
+# @EUGO_CHANGE: Not needed in Eugo environment, but preserved for reference.
 # NOTE: all of these are commented out because we don't build them
 # if(MAX_EXT_NET_PLUGINS GREATER 0)
 #     add_definitions(-DNCCL_NET_MAX_PLUGINS=${MAX_EXT_NET_PLUGINS})
 # endif()
 # Add package building subdirectories (commented out as not needed in Eugo environment, but preserved for the reference implementation)
 # if(BUILD_DEBIAN_PACKAGE OR BUILD_PACKAGES)
-# add_subdirectory(pkg/debian)
+    # add_subdirectory(pkg/debian)
 # endif()
 
 # if(BUILD_REDHAT_PACKAGE OR BUILD_PACKAGES)
-# add_subdirectory(pkg/redhat)
+    # add_subdirectory(pkg/redhat)
 # endif()
 
 # if(BUILD_TXZ_PACKAGE OR BUILD_PACKAGES)
-# add_subdirectory(pkg/txz)
+    # add_subdirectory(pkg/txz)
 # endif()
 
 # if(BUILD_CONDA_PACKAGE OR BUILD_PACKAGES)
-# add_subdirectory(pkg/conda)
+    # add_subdirectory(pkg/conda)
 # endif()
 
 # if(BUILD_SRCTXZ_PACKAGE OR BUILD_PACKAGES)
-# add_subdirectory(pkg/srctxz)
+    # add_subdirectory(pkg/srctxz)
 # endif()
-# @NVIDIA_ORIGINAL: @end
 
-if(EMIT_LLVM_IR)
-    add_definitions(-DEMIT_LLVM_IR=1)
-endif()
+
+# === @@begin: EMIT_LLVM_IR ===
+# if(EMIT_LLVM_IR)
+#     add_subdirectory(ir)
+#     add_dependencies(llvm_ir nccl_header)
+#     add_custom_target(nccl_with_ir ALL DEPENDS nccl llvm_ir)
+#     message(STATUS "LLVM IR generation will be included in default build")
+# endif()
+
+# if(EMIT_LLVM_IR)
+#     add_definitions(-DEMIT_LLVM_IR=1)
+# endif()
+# === @@end: EMIT_LLVM_IR ===
 # === @end: Option Conditionals ===
+# @NVIDIA_ORIGINAL: @end
 
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -359,6 +377,11 @@ message(STATUS "[EUGO]: CCCL found: ${cccl_CONFIG}")
 # Based on our research, NCCL doesn't directly depend on `libcuda` (`CUDA::driver_library`) so we don't add it here (or `cudadevrt`).
 # NCCL dynamically loads the CUDA driver API — it never links against it directly. This is a common pattern for libraries that want to support multiple versions of CUDA without requiring users to have a specific version of the CUDA driver installed at build time.
 # For example, `DECLARE_CUDA_PFN_EXTERN(cuMemGetHandleForAddressRange, 11070); // expands to: extern PFN_cuMemGetHandleForAddressRange_v11070 pfn_cuMemGetHandleForAddressRange` is just a pointer declaration for a function that may be loaded at runtime if available, but it's not linked against `libcuda` at build time.
+
+# @ EUGO_CHANGE: @begin: Makes the system-wide `nvml.h` visible to all targets. Needed for `EUGO_NCCL_NVML_DIRECT_HEADER=1` support.
+include_directories("${CUDAToolkit_INCLUDE_DIRS}")
+# @ EUGO_CHANGE: @end
+
 set(NCCL_DEPENDENCIES CCCL::libcudacxx CUDA::cudart)
 # === @@end: Finalized dependencies list ===
 # === @end: dependencies/ ===
@@ -385,11 +408,11 @@ add_subdirectory(ext-tuner/example)
 
 # === @begin: ext-env/ @NVIDIA_ORIGINAL: @begin: ===
 add_subdirectory(ext-env/example)
+# === @end: ext-env/ @NVIDIA_ORIGINAL: @end ===
 # === @end: Subdirectories ===
 
 
-# === @begin: DOCA Definitions ===
-# @NVIDIA_ORIGINAL: @begin:
+# === @begin: DOCA Definitions / @NVIDIA_ORIGINAL: @begin: ===
 # add_definitions(-DDOCA_VERBS_USE_CUDA_WRAPPER)
 # add_definitions(-DDOCA_VERBS_USE_NET_WRAPPER)
 # add_definitions(-DNCCL_GIN_PROXY_ENABLE=1)
@@ -399,47 +422,6 @@ add_subdirectory(ext-env/example)
 #   DOCA_VERBS_USE_CUDA_WRAPPER, DOCA_VERBS_USE_NET_WRAPPER, DOCA_VERBS_USE_IBV_WRAPPER, NCCL_GIN_PROXY_ENABLE
 # Note: upstream is MISSING DOCA_VERBS_USE_IBV_WRAPPER which is required for ibv wrapper to work.
 # === @end: DOCA Definitions ===
-
-
-# === @begin: Package Building ===
-# @NVIDIA_ORIGINAL: @begin: (upstream package building subdirectories)
-# @EUGO_CHANGE: Not needed in Eugo environment, but preserved for reference.
-#
-# if(BUILD_DEBIAN_PACKAGE OR BUILD_PACKAGES)
-#     add_subdirectory(pkg/debian)
-# endif()
-#
-# if(BUILD_REDHAT_PACKAGE OR BUILD_PACKAGES)
-#     add_subdirectory(pkg/redhat)
-# endif()
-#
-# if(BUILD_TXZ_PACKAGE OR BUILD_PACKAGES)
-#     add_subdirectory(pkg/txz)
-# endif()
-#
-# if(BUILD_CONDA_PACKAGE OR BUILD_PACKAGES)
-#     add_subdirectory(pkg/conda)
-# endif()
-#
-# if(BUILD_SRCTXZ_PACKAGE OR BUILD_PACKAGES)
-#     add_subdirectory(pkg/srctxz)
-# endif()
-#
-# if(BUILD_DOC_PACKAGE OR BUILD_PACKAGES)
-#     add_subdirectory(pkg/doc)
-# endif()
-# @NVIDIA_ORIGINAL: @end
-# === @end: Package Building ===
-
-
-# === @begin: EMIT_LLVM_IR ===
-if(EMIT_LLVM_IR)
-    add_subdirectory(ir)
-    add_dependencies(llvm_ir nccl_header)
-    add_custom_target(nccl_with_ir ALL DEPENDS nccl llvm_ir)
-    message(STATUS "LLVM IR generation will be included in default build")
-endif()
-# === @end: EMIT_LLVM_IR ===
 
 
 # === @begin: Install and Configuration Targets ===

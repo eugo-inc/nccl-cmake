@@ -440,10 +440,19 @@ target_include_directories(
 )
 
 
-# Only nccl.h and nccl_net.h are public headers and only they are installed!
+# Only nccl.h, nccl_device.h, and nccl_device/* are public headers and only they are installed!
+# nccl.h and nccl_device.h go into NCCL_PUBLIC_HEADERS (installed flat via `install(FILES ...)`).
+# nccl_device/ is exported as NCCL_DEVICE_HEADERS_DIR and installed via `install(DIRECTORY ...)`
+# in the parent to preserve the full subdirectory tree (e.g. nccl_device/gin/gdaki/...).
 set(NCCL_PUBLIC_HEADERS
     ${CONFIGURED_HEADERS_DIR}/nccl.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin/nccl_net.h
+    # We used to need this, but its now not needed...
+    # ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin/nccl_net.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device.h
+    PARENT_SCOPE
+)
+set(NCCL_DEVICE_HEADERS_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device"
     PARENT_SCOPE
 )
 # === @end: `libnccl` library ===
