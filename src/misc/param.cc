@@ -65,8 +65,10 @@ static void initEnvFunc() {
       setEnvFile(confFilePath);
     }
   }
-  snprintf(confFilePath, sizeof(confFilePath), "/etc/nccl.conf");
-  setEnvFile(confFilePath);
+  // @EUGO_CHANGE: @begin: commenting this out... They unconditionally override the `NCCL_CONF_FILE` env var...
+  // snprintf(confFilePath, sizeof(confFilePath), "/etc/nccl.conf");
+  // setEnvFile(confFilePath);
+  // @EUGO_CHANGE: @end
 }
 
 void initEnv() {
