@@ -54,16 +54,16 @@
 //     __atomic_store_n((ptr), (val), NCCL_CONVERT_ORDER(order))
 //
 // AFTER (with __builtin_assume_aligned wrapper, inline LDAR/STLR instructions):
+// @EUGO_CHANGE: All three macros below wrap ptr with (__typeof__(ptr))__builtin_assume_aligned(...)
+// to fix clang codegen for atomics on packed struct members. See detailed explanation above.
+// COMPILER_ATOMIC_LOAD_DEST also changed from __atomic_load (library call) to
+// *(dest) = __atomic_load_n (inline instruction + assign).
 #define COMPILER_ATOMIC_LOAD(ptr, order) \
-  // @EUGO_CHANGE: Changed from __atomic_load_n(ptr, order) to __atomic_load_n((__typeof__(ptr))__builtin_assume_aligned((void*)(ptr), sizeof(*(ptr))), order) to fix clang codegen for atomics on packed struct members. See detailed explanation above.
   __atomic_load_n((__typeof__(ptr))__builtin_assume_aligned((void*)(ptr), sizeof(*(ptr))), NCCL_CONVERT_ORDER(order))
 #define COMPILER_ATOMIC_LOAD_DEST(ptr, dest, order) do { \
-  // @EUGO_CHANGE: Changed from __atomic_load(ptr, dest, order) to *(dest) = __atomic_load_n((__typeof__(ptr))__builtin_assume_aligned((void*)(ptr), sizeof(*(ptr))), order) to fix clang codegen for atomics on packed struct members. See detailed explanation above.
   *(dest) = __atomic_load_n((__typeof__(ptr))__builtin_assume_aligned((void*)(ptr), sizeof(*(ptr))), NCCL_CONVERT_ORDER(order)); \
 } while(0)
 #define COMPILER_ATOMIC_STORE(ptr, val, order) \
-  // @EUGO_CHANGE: Changed from __atomic_store_n(ptr, val, order) to __atomic_store_n((__typeof__(ptr))__builtin_assume_aligned((void*)(ptr), sizeof(*(ptr))), (val), order) to fix clang codegen for atomics on packed struct members. See detailed explanation above.
-   __atomic_store_n((__typeof__(ptr))__builtin_assume_aligned((void*)(ptr), sizeof(*(ptr))), (val), NCCL_CONVERT_ORDER(order))
   __atomic_store_n((__typeof__(ptr))__builtin_assume_aligned((void*)(ptr), sizeof(*(ptr))), (val), NCCL_CONVERT_ORDER(order))
 //
 // ADDITIONAL FIX in COMPILER_ATOMIC_LOAD_DEST:

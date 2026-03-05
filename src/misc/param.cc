@@ -20,6 +20,13 @@
 #include <pwd.h>
 #include "os.h"
 
+// @EUGO_CHANGE: @begin:
+// See `EUGO_CHANGE` below!
+#include <filesystem>
+#include <cstring>
+// @EUGO_CHANGE: @end
+
+
 const char* userHomeDir() {
   struct passwd *pwUser = getpwuid(getuid());
   return pwUser == NULL ? NULL : pwUser->pw_dir;
@@ -52,24 +59,73 @@ void setEnvFile(const char* fileName) {
   fclose(file);
 }
 
+// @EUGO_CHANGE: @begin:
+// Changes:
+// 1. Fixed issue w/ unconditionally set default conf file path
+// 2. Using the different default conf file path `/etc/nccl.conf` -> `/usr/local/etc/nccl.conf`
+//
+// See original version below!
 static void initEnvFunc() {
-  char confFilePath[1024];
+  // In the original implementation, first `NCCL_CONF_FILE` env var is checked and fills the NCCL configuration if it exists.
+  // If it doesn't exist, it checks for the user home directory config file and fills the config if it exists.
+  // Finally, it unconditionally merges the values from the default conf file path `/etc/nccl.conf` which is not ideal as it can override the previously set config values from the user home directory or `NCCL_CONF_FILE` env var.
+  //
+  // We've restructured the logic in a way that the first source found wins and multiple sources aren't merged together.
+  // We've made it in a way that by default NCCL will ue our default config file but end-users will be able to override it via `NCCL_CONF_PATH` (and individual environment variables, if they work at all).
+  // 1. `NCCL_CONF_FILE` env var
+  // 2. `~/.nccl.conf`
+  // 3. `/usr/local/etc/nccl.conf`
+  //
+  // File is only used if it exists in contrast to original logic which attempts to use the file even if it doesn't exist, overriding the previously set config to some extent.
+
+  // 1. `NCCL_CONF_FILE` env var
   const char* userFile = std::getenv("NCCL_CONF_FILE");
   if (userFile && strlen(userFile) > 0) {
-    snprintf(confFilePath, sizeof(confFilePath), "%s", userFile);
-    setEnvFile(confFilePath);
-  } else {
-    const char* userDir = userHomeDir();
-    if (userDir) {
-      snprintf(confFilePath, sizeof(confFilePath), "%s/.nccl.conf", userDir);
-      setEnvFile(confFilePath);
+    const std::filesystem::path userFilePath{std::string(userFile)};
+    // If the file is specified in `NCCL_CONF_FILE` env var but the pointed file doesn't exist, we fall through to the next configuration source.
+    INFO(NCCL_ENV,"'NCCL_CONF_FILE' is set by environment to '%s' but doesn't exist. Skipping to the next source.", userFile);
+    if (std::filesystem::exists(userFilePath)) {
+      setEnvFile(strdup(userFilePath.string().c_str()));
+      return;
     }
   }
-  // @EUGO_CHANGE: @begin: commenting this out... They unconditionally override the `NCCL_CONF_FILE` env var...
-  // snprintf(confFilePath, sizeof(confFilePath), "/etc/nccl.conf");
-  // setEnvFile(confFilePath);
-  // @EUGO_CHANGE: @end
+
+  // 2. `~/.nccl.conf`
+  const std::filesystem::path userDirPath{std::string(userHomeDir())};
+  const std::filesystem::path userConfFilePath = userDirPath / ".nccl.conf";
+  if (std::filesystem::exists(userConfFilePath)) {
+    setEnvFile(strdup(userConfFilePath.string().c_str()));
+    return;
+  }
+
+  // 3. `/usr/local/etc/nccl.conf`
+  const std::filesystem::path defaultConfFilePath{"/usr/local/etc/nccl.conf"};
+  if (std::filesystem::exists(defaultConfFilePath)) {
+    setEnvFile(strdup(defaultConfFilePath.string().c_str()));
+    return; // In case if more cases will be added in future.
+  }
 }
+
+// @EUGO_ORIGINAL:
+// static void initEnvFunc() {
+//   char confFilePath[1024];
+//   const char* userFile = std::getenv("NCCL_CONF_FILE");
+//   if (userFile && strlen(userFile) > 0) {
+//     snprintf(confFilePath, sizeof(confFilePath), "%s", userFile);
+//     setEnvFile(confFilePath);
+//   } else {
+//     const char* userDir = userHomeDir();
+//     if (userDir) {
+//       snprintf(confFilePath, sizeof(confFilePath), "%s/.nccl.conf", userDir);
+//       setEnvFile(confFilePath);
+//     }
+//   }
+//   snprintf(confFilePath, sizeof(confFilePath), "/etc/nccl.conf");
+//   setEnvFile(confFilePath);
+// }
+//
+// @EUGO_CHANGE: @end
+
 
 void initEnv() {
   static std::once_flag once;

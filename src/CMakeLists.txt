@@ -420,8 +420,11 @@ set_target_properties(
 # Without this, all internal symbols leak into the .so's dynamic symbol table.
 # $<HOST_LINK:> prevents this flag from leaking into the CUDA device link compilation step,
 # which would cause: clang++: warning: -Wl,--version-script=...: 'linker' input unused
+# NOTE: Must use LINKER: prefix instead of -Wl, because the comma inside $<HOST_LINK:>
+# is parsed as a generator-expression list separator, splitting "-Wl,--version-script=..."
+# into two tokens: "-Wl" and "--version-script=..." (which clang rejects as unknown argument).
 target_link_options(nccl PRIVATE
-    "$<HOST_LINK:-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnccl.map>"
+    "$<HOST_LINK:LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnccl.map>"
 )
 
 
