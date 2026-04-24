@@ -171,7 +171,7 @@ set(NCCL_COMMON_COMPILE_DEFINITIONS
 
     # EMIT_LLVM_IR=1 # Generate LLVM IR for device APIs" [option: `EMIT_LLVM_IR`], this is used in `@/bindings/ir/` subdirectory so it can be used by code generation packages to enable calling NCCL APIs w/o the roundtrip to the host. However, as of now we don't have such packages so we don't enable it yet.
 
-    # EUGO_NCCL_NVML_DIRECT_HEADER=1 # @TODO+: RETURN THAT PRIOR GREAT REBUILD. Eugo-specific: allows using `nvml.h` from the system but still load `libnvidia-ml` dynamically via `dlopen`. This is safe in Eugo Environment as we always have one and only one version of this library in a given version and it's better to have all APIs set for efficiency rather than not.
+    EUGO_NCCL_NVML_DIRECT_HEADER=1 # Eugo-specific: allows using `nvml.h` from the system but still load `libnvidia-ml` dynamically via `dlopen`. This is safe in Eugo Environment as we always have one and only one version of this library in a given version and it's better to have all APIs set for efficiency rather than not.
 )
 
 # === @begin:Options conditionals ===
@@ -390,25 +390,34 @@ set(NCCL_DEPENDENCIES CCCL::libcudacxx CUDA::cudart)
 add_subdirectory(src)
 # === @end: src/ ===
 
-# === @end: ext-mixed/ @NVIDIA_ORIGINAL: @begin: ===
-add_subdirectory(ext-mixed/example)
-# === @end: ext-mixed/ @NVIDIA_ORIGINAL: @end ===
-
-# === @end: ext-net/ @NVIDIA_ORIGINAL: @begin: ===
-add_subdirectory(ext-net)
-# === @end: ext-net/ @NVIDIA_ORIGINAL: @end ===
-
-# === @begin: ext-profiler/ @NVIDIA_ORIGINAL: @begin: ===
-add_subdirectory(ext-profiler/example)
-# === @end: ext-profiler/ @NVIDIA_ORIGINAL: @end ===
-
-# === @begin: ext-tuner/ @NVIDIA_ORIGINAL: @begin: ===
-add_subdirectory(ext-tuner/example)
-# === @end: ext-tuner/ @NVIDIA_ORIGINAL: @end ===
-
-# === @begin: ext-env/ @NVIDIA_ORIGINAL: @begin: ===
-add_subdirectory(ext-env/example)
-# === @end: ext-env/ @NVIDIA_ORIGINAL: @end ===
+# === @begin: @NVIDIA_ORIGINAL: ===
+# @Important:
+# We don't build these plugins as they're primarly used for examples and testing:
+# 1. Moreover, official `nvidia_nccl_cu13` PyPi wheel doesn't ship them either.
+# 2. `ext-net` was used as a foundation by AWS `nccl-ofi-plugin`.
+# 3. And the default install target doesn't install them either.
+#
+# # === @begin: ext-mixed/ ===
+# add_subdirectory(ext-mixed/example)
+# # === @end: ext-mixed/ ===
+#
+# # === @begin: ext-net/ ===
+# add_subdirectory(ext-net)
+# # === @end: ext-net/ ===
+#
+# # === @begin: ext-profiler/ ===
+# add_subdirectory(ext-profiler/example)
+# # === @end: ext-profiler/ ===
+#
+# # === @begin: ext-tuner/ ===
+# add_subdirectory(ext-tuner/example)
+# # === @end: ext-tuner/ ===
+#
+# # === @begin: ext-env/ ===
+# add_subdirectory(ext-env/example)
+# # === @end: ext-env/ ===
+# === @end: @NVIDIA_ORIGINAL ===
+#
 # === @end: Subdirectories ===
 
 
@@ -430,6 +439,23 @@ include(GNUInstallDirs)
 # Install the headers into the include directory
 install(FILES ${NCCL_PUBLIC_HEADERS} TYPE INCLUDE)
 
+# @EUGO_CHANGE: @EUGO_NOTE: Only `nccl` (libnccl.so) and `ncclras` are installed as shippable artifacts.
+# The five targets from the ext-*/example add_subdirectory() calls above are intentionally
+# NOT listed here:
+#   - libnccl-mixed-example.so     → ${CMAKE_BINARY_DIR}/test/unit/plugins/
+#   - libnccl-net-example.so       → ${CMAKE_BINARY_DIR}/test/unit/plugins/
+#   - libnccl-profiler-example.so  → ${CMAKE_BINARY_DIR}/lib/ (POST_BUILD copy → test/unit/plugins/)
+#   - libnccl-tuner-example.so     → ${CMAKE_BINARY_DIR}/test/unit/plugins/
+#   - libnccl-env-example.so       → ${CMAKE_BINARY_DIR}/test/unit/plugins/
+# These are NVIDIA's reference/example plugins — scaffolding for external developers writing
+# their own plugins — not production artifacts. Our production deployments load different
+# plugins at runtime (e.g., aws-ofi-nccl for EFA via NCCL_NET_PLUGIN), built and installed as
+# separate packages outside this tree. Shipping the examples would pollute the install prefix
+# and risk accidental dlopen() by NCCL's plugin chain looking for libnccl-net.so /
+# libnccl-tuner.so / libnccl-profiler.so / libnccl-env.so.
+#
+# If a test harness needs them outside the build tree, reference ${CMAKE_BINARY_DIR} directly
+# rather than installing here.
 install(
     TARGETS nccl ncclras # `nccl_colldevice` isn't installed separately but used as a private implementation detail for `nccl`
     EXPORT NCCLConfig
@@ -458,16 +484,4 @@ install(
 #     @ONLY
 # )
 # @EUGO_CHANGE: @end
-
-
-# NOTE: This is the install target output!
-# -- Installing: /usr/local/include/nccl.h
-# -- Up-to-date: /usr/local/include/nccl_net.h
-# -- Installing: /usr/local/lib64/libnccl.so.2.16.2.1
-# -- Installing: /usr/local/lib64/libnccl.so.2
-# -- Installing: /usr/local/lib64/libnccl.so
-# -- Installing: /usr/local/bin/ncclras
-# -- Installing: /usr/local/lib64/cmake/nccl/NCCLConfig.cmake
-# -- Installing: /usr/local/lib64/cmake/nccl/NCCLConfig-release.cmake
-# === @end: Install and Configuration Targets ===
 

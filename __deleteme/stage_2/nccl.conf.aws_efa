@@ -1,0 +1,219 @@
+# NCCL conf — scenario: aws_efa (AWS p6e-gb200 only)
+# ====================================================================================
+# Target hardware: EC2 p6e-gb200 UltraServers and UltraClusters.
+#   - Compute:    NVIDIA Grace CPU (ARM Neoverse V2) + Blackwell B200 GPUs (sm_100a)
+#                 per tray; C2C interconnect between Grace and Blackwell.
+#   - Intra-rack: NVL72 rack-scale NVLink fabric — 72 GPUs / 9 NVSwitches form one
+#                 logical multicast domain. Per-GPU ~1.8 TB/s NVLink5 bandwidth.
+#                 UltraServer variants: p6e-gb200u.36xlarge (9 trays / 36 GPUs / ½ rack)
+#                                      p6e-gb200u.72xlarge (18 trays / 72 GPUs / full rack).
+#   - Inter-rack: EFAv4 — 3200 Gbps aggregate per tray via multiple adapters, routed
+#                 through aws-ofi-nccl (libfabric fi_efa provider). Only path between
+#                 UltraServers inside an UltraCluster.
+# NCCL version:   2.29.3-1 (eugo-inc/nccl-cmake, NVIDIA-upstream-master-02-26)
+# CUDA required:  >= 12.4 (Blackwell sm_100a support + cuMulticast for NVL72).
+# FM required:    NVIDIA Fabric Manager running and reporting MULTINODE clique.
+# ====================================================================================
+#
+# Conf loader: first-match-wins via $NCCL_CONF_FILE -> ~/.nccl.conf -> /usr/local/etc/nccl.conf.
+# Shell env vars override conf file values (setenv flag 0 in ncclOsSetEnv). This file
+# is a floor, not a ceiling — operators can override anything below via shell env.
+# Parse rules: KEY=VALUE, '#' comments at line start only, NO quoting, whitespace NOT
+# trimmed, 1023-byte cap on key and value, malformed lines silently skipped.
+#
+# Plugin-side tuning (FI_* / OFI_NCCL_*) for the aws-ofi-nccl plugin does NOT belong
+# in this file. Those vars go in the launcher / systemd env / userdata. See
+# https://github.com/aws/aws-ofi-nccl for the plugin's own tunables.
+
+# ---------------------------------------------------------------
+# Diagnostics
+# ---------------------------------------------------------------
+# Baseline logging. Operators flip to INFO/TRACE via shell env when debugging.
+NCCL_DEBUG=WARN
+
+# Names NCCL's internal threads (proxy, bootstrap, progress, RAS) via pthread_setname_np.
+# Near-zero overhead (one syscall per thread at creation). Makes gdb/Nsight/htop output
+# immediately identifiable — critical for debugging hangs on 72-GPU collectives.
+NCCL_SET_THREAD_NAME=1
+
+# ---------------------------------------------------------------
+# Transport selection
+# ---------------------------------------------------------------
+# EFA devices ARE visible via libibverbs (rdma-core's `efa` provider — ibv_devinfo lists
+# them), but they expose SRD queue pairs, not RC. NCCL's built-in net_ib transport in
+# src/transport/net_ib/connect.cc (ncclIbRtsQp, ncclIbMultiSend) creates RC QPs and
+# posts RDMA_WRITE / RDMA_WRITE_WITH_IMM — a dialect EFA's SRD does not implement, and
+# net_ib has no EFA-specific branch. With IB_DISABLE=0 (default), enumeration succeeds
+# but QP setup or post-send fails at init. Setting =1 skips built-in IB entirely so
+# NCCL falls through to the plugin chain and loads aws-ofi-nccl. Shadows all NCCL_IB_*.
+NCCL_IB_DISABLE=1
+
+# ---------------------------------------------------------------
+# Multi-Node NVLink (MNNVL) — the whole point of picking p6e over p5
+# ---------------------------------------------------------------
+# p6e is NVL72: 72 GPUs across 9 or 18 trays share a single NVLink5/NVSwitch fabric.
+# Cross-tray collectives route at ~1.8 TB/s per GPU over NVLink — five to ten times
+# more bandwidth than the same collective over EFAv4 (~400 GB/s per tray aggregate).
+# We STRICT-pin =1: if Fabric Manager is missing, misconfigured, or not reporting a
+# MULTINODE clique, NCCL fails LOUD at init rather than silently degrading to EFA.
+# This is the safer mode for a deployment that is always-NVL72 — silent fallback would
+# waste ~80% of the available intra-rack bandwidth and look like a perf regression
+# rather than a configuration error.
+NCCL_MNNVL_ENABLE=1
+
+# MNNVL requires the CUDA Virtual Memory Management API (cuMemCreate / cuMemMap /
+# cuMemSetAccess) for multicast memory handles that span trays. Auto-detect (=-2)
+# probes the driver and can fail-open to legacy cudaMalloc on weird setups. On p6e
+# the driver is always CUDA 12.4+ with VMM support, so we pin =1 explicitly to (a)
+# match the MNNVL=1 contract above, (b) guarantee P2P_CUMEM transport is available
+# for IPC between trays, and (c) unblock NCCL_RUNTIME_CONNECT.
+NCCL_CUMEM_ENABLE=1
+
+# ---------------------------------------------------------------
+# GPU Direct RDMA over EFA (cross-UltraServer in an UltraCluster)
+# ---------------------------------------------------------------
+# Blackwell + Grace + EFAv4 + recent kernel supports dma-buf GDR. NCCL auto-probes
+# (ibv_reg_dmabuf_mr + cuMemGetHandleForAddressRange + kernel /proc/driver/nvidia/params)
+# and would silently disable on failure. We pin =1 explicitly: if dma-buf is broken
+# at the kernel/driver level, we want to know at init rather than quietly falling
+# back to the legacy nvidia-peermem path (slower error handling, no heterogeneous
+# memory support, and requires the deprecated kernel module).
+NCCL_DMABUF_ENABLE=1
+
+# ---------------------------------------------------------------
+# NVLink SHARP (NVSwitch in-switch reduction)
+# ---------------------------------------------------------------
+# NVL72 NVSwitches support NVLink SHARP (NVLS) — AllReduce reduction happens inside
+# the switch ASIC, GPU→NVSwitch(reduce)→GPU in one hop. Default =2 (auto) probes
+# cuMulticastSupported and cuMulticastCreate — on Blackwell+NVSwitch5 this always
+# succeeds, so auto and an explicit =1 are functionally identical. We leave =2
+# (auto) rather than pinning =1 because (a) auto already does the right thing,
+# (b) =1 would fail communicator creation if a future CUDA/driver regression breaks
+# multicast, which is worse than silent fallback for a non-load-bearing optimization
+# (NVLS is a 2–4× AllReduce bandwidth gain, not correctness).
+#NCCL_NVLS_ENABLE=2    # left unset — default=2 is correct
+
+# ---------------------------------------------------------------
+# Grace-specific C2C optimizations
+# ---------------------------------------------------------------
+# Grace CPU ↔ Blackwell GPU link is C2C (900 GB/s bidirectional), not PCIe. PXN
+# (Proxy Networking) uses C2C instead of PCIe when routing data from a remote GPU
+# through a local CPU to a NIC. Default became =1 in NCCL 2.28 — we pin it to guard
+# against an upstream regression flipping the default. Loses ~30% of inter-rack
+# bandwidth on any Grace-based instance if disabled.
+NCCL_PXN_C2C=1
+
+# LL128 protocol over C2C: relies on 128-byte atomic visibility that C2C supports
+# natively. Default =1 in 2.29 — pinned explicitly because LL128 is the bandwidth-
+# optimal protocol for medium messages (16 KB – 512 KB) on Grace and flipping it off
+# would silently drop ring/tree collectives back to Simple protocol with ~15% loss.
+NCCL_LL128_C2C=1
+
+# ---------------------------------------------------------------
+# Cross-rail bandwidth (multi-EFAv4-NIC fat-tree)
+# ---------------------------------------------------------------
+# p6e UltraServer trays carry multiple EFAv4 adapters per tray. In an UltraCluster,
+# those NICs terminate on a fat-tree fabric where cross-rail paths exist (NIC A on
+# tray 0 can reach NIC B on tray 1 via any top-of-rack switch). Default =2 (auto)
+# starts with rail-local and falls back to cross-NIC on failure. On p6e fat-tree we
+# always want cross-NIC allowed to saturate aggregate bandwidth — pinning =1 tells
+# the topology search to use a figure-8 pattern across NICs from the start instead
+# of paying for the fallback probe.
+NCCL_CROSS_NIC=1
+
+# ---------------------------------------------------------------
+# Kernel launch determinism (multi-communicator deadlock safety)
+# ---------------------------------------------------------------
+# Large training jobs on 72 GPUs routinely run data-parallel + tensor-parallel +
+# pipeline-parallel communicators on the same device simultaneously. Default =0
+# allows concurrent NCCL ops from different comms to interleave in GPU stream order,
+# which can deadlock when two comms wait for each other's ordering. Pinning =1
+# inserts cudaStreamWaitEvent between ops from different comms and enforces host
+# launch order — eliminates one class of hard-to-reproduce hangs at the cost of
+# some theoretical overlap that the hybrid-parallel application rarely achieves.
+NCCL_LAUNCH_ORDER_IMPLICIT=1
+
+# ---------------------------------------------------------------
+# CUDA memory sync domain isolation (Hopper/Blackwell feature)
+# ---------------------------------------------------------------
+# Blackwell (sm_100) supports per-kernel memory synchronization domains. Default =1
+# already uses the Remote domain for NCCL kernels so __threadfence_system() in NCCL
+# doesn't contend with compute kernels' fences. Pinning =1 explicitly makes the
+# intent visible in the conf and ensures a future NCCL release flipping the default
+# doesn't silently regress overlap latency by 10–30%.
+NCCL_MEM_SYNC_DOMAIN=1
+
+# ---------------------------------------------------------------
+# GPU-Initiated Networking — disable on EFA (known incompatibility)
+# ---------------------------------------------------------------
+# NCCL 2.28+ enables GIN by default (default=1). GIN requires DOCA GPUNetIO / BlueField-3
+# DPU, which p6e does NOT have. More importantly, upstream NCCL #1913 documents an
+# incompatibility: "NCCL 2.28.9 GIN Incompatible with External Network Plugins on
+# Multi-Rail EFA" — GIN's init path conflicts with aws-ofi-nccl on hosts with multiple
+# EFA adapters (p6e has up to 17 per tray), and the failure mode is a hang at bootstrap
+# on some driver/plugin combinations. Pin =0 to (a) skip the GPUNetIO probe entirely
+# and (b) guarantee the plugin chain loads aws-ofi-nccl cleanly.
+# Reference: https://github.com/NVIDIA/nccl/issues/1913
+NCCL_GIN_ENABLE=0
+
+# ---------------------------------------------------------------
+# Small-message all-to-all latency (MoE / expert parallelism at 72-GPU scale)
+# ---------------------------------------------------------------
+# MoE training on 72 GPUs does hundreds of thousands of small (4–64 KB) sends per
+# step between every pair of ranks (expert parallelism). Default lazily allocates
+# LL-protocol buffers on first use, adding a cudaMalloc spike at the first small
+# op per connection — visible as a ~10-ms stall on rank 0 of the first training
+# step. Pinning =1 pre-allocates LL buffers on every net connection at init,
+# trading ~llBuffSize × nNetPeers × nChannels × 2 of GPU memory (a few tens of MB
+# on 72 ranks) for a clean first step. Worth it on Blackwell with 192 GB HBM.
+NCCL_ALLOC_P2P_NET_LL_BUFFERS=1
+
+# ---------------------------------------------------------------
+# DEPLOYMENT TEMPLATES — populate at image/AMI build time
+# ---------------------------------------------------------------
+# Bootstrap interface filter. On p6e hosts the primary ENA is typically `ens5`
+# (check with `ip -o link | awk -F': ' '{print $2}'` on the instance). Use '='
+# prefix for EXACT match to avoid accidentally picking docker bridges or EFA
+# devices (which appear as ens* too but are not suitable for TCP bootstrap).
+#   NCCL_SOCKET_IFNAME==ens5                   # exact match, single interface
+#   NCCL_SOCKET_IFNAME=^docker0,^lo            # exclusion list fallback
+#NCCL_SOCKET_IFNAME=
+
+# NET plugin discovery. On a stock AWS DL AMI with aws-ofi-nccl preinstalled, the
+# plugin ships as libnccl-net.so on LD_LIBRARY_PATH and NCCL's default discovery
+# finds it without any hint — leave unset. Override only in container images where
+# multiple plugins coexist, or when the plugin lives outside the search path.
+#   NCCL_NET_PLUGIN=ofi                                               # libnccl-net-ofi.so
+#   NCCL_NET_PLUGIN=/opt/amazon/aws-ofi-nccl/lib/libnccl-net.so       # absolute path
+#NCCL_NET_PLUGIN=
+
+# Topology XML. Based on 2026-04 research: NCCL 2.29 auto-detection works on bare-metal
+# p6e-gb200, but container/NUMA edge cases are known (commit in 2.29.x fixed "NCCL topo
+# generation for GB200 in Docker containers where NUMA nodes disconnected from Package
+# nodes caused incorrect topology generation"). No public p6e-gb200 topology XML exists
+# on GitHub (aws-ofi-nccl ships only p4d/p4de/g5 files as of 2026-04). aws-ofi-nccl
+# handles EFA/UltraCluster fabric as opaque SRD transport → no separate XML needed for
+# UltraClusters. Recommended methodology:
+#   1. Deploy once without NCCL_TOPO_FILE set, let auto-detect run.
+#   2. On first boot, set NCCL_TOPO_DUMP_FILE=/tmp/nccl-topo-p6e.xml to capture it.
+#   3. Diff across NCCL versions (no schema stability contract; xml.h grew ~50% from
+#      2.20→2.29 — tags are stable but attributes change).
+#   4. Only set NCCL_TOPO_FILE to override if a reproducible wrong-graph case is seen
+#      and tracked to an upstream issue.
+# See https://github.com/NVIDIA/nccl/issues/1801, /1810, /1913 for open GB200 tuning/
+# topology issues being tracked.
+#NCCL_TOPO_FILE=/etc/nccl/virtualTopology.p6e-gb200.xml
+
+# Uncomment on first-boot canary to capture the auto-detected XML for diff across NCCL
+# upgrades (see §5 of NCCL_ENV_VARS.md). Remove from production conf once captured.
+#NCCL_TOPO_DUMP_FILE=/tmp/nccl-topo-p6e-gb200.xml
+
+# ---------------------------------------------------------------
+# DO NOT ADD FI_* / OFI_NCCL_* HERE
+# ---------------------------------------------------------------
+# FI_EFA_USE_DEVICE_RDMA, FI_EFA_FORK_SAFE, FI_PROVIDER, OFI_NCCL_PROTOCOL, etc.
+# belong in the launcher / systemd unit / userdata — they are consumed by the
+# aws-ofi-nccl plugin's own init, not by libnccl. Even though the conf loader
+# would technically setenv() them into the process environment (since it doesn't
+# validate the NCCL_ prefix), co-locating plugin tuning with libnccl tuning makes
+# this file less portable when the plugin changes. Keep the concerns separated.

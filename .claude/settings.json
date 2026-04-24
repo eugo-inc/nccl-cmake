@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E '\\\\.\\(h|cc\\)$')",
+      "Bash(awk -F'NCCL_PARAM\\\\\\\\\\(' '{print $2}')",
+      "Bash(awk -F',' '{print $2}')",
+      "Bash(sed 's/^[[:space:]]*\"\\\\\\(.*\\\\\\)\"[[:space:]]*$/\\\\1/')",
+      "Bash(awk '{print \"NCCL_\" $0}')",
+      "Bash(grep -o '`NCCL_[A-Za-z0-9_]*`' /Users/benjaminleff/repos/eugo/nccl-cmake/__deleteme/NCCL_ENV_VARS.md)",
+      "Bash(shuf)",
+      "Bash(grep -v '^NCCL_$')",
+      "Bash(sort -u wc -l /tmp/doc_clean.txt echo \"\" echo \"Hallucinations \\(in doc but not in source\\):\" comm -23 /tmp/doc_clean.txt /tmp/source_vars.txt)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
+    ]
+  }
+}
