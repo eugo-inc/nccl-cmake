@@ -13,6 +13,18 @@ configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in
     ${CONFIGURED_HEADERS_DIR}/nccl.h
 )
+# @NVIDIA_ORIGINAL: @begin: (upstream uses sed instead of configure_file)
+# add_custom_command(
+#     OUTPUT ${CMAKE_BINARY_DIR}/include/nccl.h
+#     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/include
+#     COMMAND sed -e "s/\\$$\\{nccl:Major\\}/${NCCL_MAJOR}/g"
+#                 -e "s/\\$$\\{nccl:Minor\\}/${NCCL_MINOR}/g"
+#                 -e "s/\\$$\\{nccl:Patch\\}/${NCCL_PATCH}/g"
+#                 -e "s/\\$$\\{nccl:Suffix\\}/${NCCL_SUFFIX}/g"
+#                 -e "s/\\$$\\{nccl:Version\\}/${NCCL_VERSION_CODE}/g"
+#                 ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in > ${CMAKE_BINARY_DIR}/include/nccl.h
+# )
+# @NVIDIA_ORIGINAL: @end
 # NOTE: this is the NVIDIA_ORIGINAL and just for documentation purposes.
 # We can't place this in `nccl.h.in` file b/c it causes errors, so leaving it here for reference
 # #define NCCL_MAJOR ${nccl:Major}
@@ -24,12 +36,120 @@ configure_file(
 # === @end: Headers Configuration ===
 
 
+# === @begin: nccl_header target ===
+# @EUGO_CHANGE: Upstream defines this as a dependency ordering target so that other targets
+# (nccl_device, llvm_ir) can depend on the configured nccl.h being available.
+# Root CMakeLists.txt references: add_dependencies(llvm_ir nccl_header)
+# src/device/CMakeLists.txt references: add_dependencies(nccl_device nccl_header)
+add_custom_target(nccl_header DEPENDS ${CONFIGURED_HEADERS_DIR}/nccl.h)
+# === @end: nccl_header target ===
+
+
+# === @begin: generate_git_version ===
+# @EUGO_CHANGE: New upstream feature (v2.29.x). Generates git_version.h at build time
+# which is #included by misc/git_version.cc. The script only rewrites the file if content changed.
+# We output to CONFIGURED_HEADERS_DIR (build/src/include/) which is already on the include path,
+# rather than upstream's ${CMAKE_BINARY_DIR}/include which would need a separate include dir.
+set(GIT_VERSION_FILE "${CONFIGURED_HEADERS_DIR}/git_version.h")
+add_custom_target(generate_git_version ALL
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/src/misc/generate_git_version.py ${GIT_VERSION_FILE}
+    COMMENT "Checking git version"
+    BYPRODUCTS ${GIT_VERSION_FILE}
+)
+# === @end: generate_git_version ===
+
+
 # === @begin: device/ ===
 add_subdirectory(device)
 # === @end: device/ ===
 
 
+# === @begin: DOCA GPUNetIO Header Copying ===
+# @EUGO_CHANGE: The DOCA headers live under doca-gpunetio (with a hyphen), but C++ includes
+# reference doca_gpunetio (with an underscore). We copy them to the build directory at the
+# expected underscore path so that #include "doca_gpunetio/..." works.
+#
+# Include chain: gin_device_api.h → gin_gdaki.h → "doca_gpunetio/doca_gpunetio_device.h"
+# Since ${CMAKE_BINARY_DIR}/include is in the include path, we copy to:
+#   ${CMAKE_BINARY_DIR}/include/doca_gpunetio/
+# so the include resolves correctly.
+
+set(DOCA_HOME ${CMAKE_CURRENT_SOURCE_DIR}/transport/net_ib/gdaki/doca-gpunetio)
+set(DOCA_INCLUDE_SOURCE_DIR ${DOCA_HOME}/include)
+set(DOCA_INCLUDE_DEST_DIR ${CMAKE_BINARY_DIR}/include/doca_gpunetio) # @EUGO_CHANGE: `${CMAKE_BINARY_DIR}/include/nccl_device/gin/gdaki/doca_gpunetio`
+
+# Copy top-level device header
+file(GLOB DOCA_HEADER_TOP ${DOCA_INCLUDE_SOURCE_DIR}/doca_gpunetio_device.h)
+foreach(HEADER_FILE ${DOCA_HEADER_TOP})
+    get_filename_component(HEADER_NAME ${HEADER_FILE} NAME)
+    configure_file(${HEADER_FILE} ${DOCA_INCLUDE_DEST_DIR}/${HEADER_NAME} COPYONLY)
+    list(APPEND DEVICE_DOCA_HEADERS ${DOCA_INCLUDE_DEST_DIR}/${HEADER_NAME})
+endforeach()
+
+# Copy common/ headers (.h)
+file(GLOB DOCA_HEADER_COMMON ${DOCA_INCLUDE_SOURCE_DIR}/common/*.h)
+foreach(HEADER_FILE ${DOCA_HEADER_COMMON})
+    get_filename_component(HEADER_NAME ${HEADER_FILE} NAME)
+    configure_file(${HEADER_FILE} ${DOCA_INCLUDE_DEST_DIR}/common/${HEADER_NAME} COPYONLY)
+    list(APPEND DEVICE_DOCA_HEADERS ${DOCA_INCLUDE_DEST_DIR}/common/${HEADER_NAME})
+endforeach()
+
+# Copy device/ headers (.cuh) — these contain CUDA device code (__device__, PTX asm, etc.)
+# They are only compiled via the device header chain into generated .cu files.
+file(GLOB DOCA_HEADER_DEVICE ${DOCA_INCLUDE_SOURCE_DIR}/device/*.cuh)
+foreach(HEADER_FILE ${DOCA_HEADER_DEVICE})
+    get_filename_component(HEADER_NAME ${HEADER_FILE} NAME)
+    configure_file(${HEADER_FILE} ${DOCA_INCLUDE_DEST_DIR}/device/${HEADER_NAME} COPYONLY)
+    list(APPEND DEVICE_DOCA_HEADERS ${DOCA_INCLUDE_DEST_DIR}/device/${HEADER_NAME})
+endforeach()
+# === @end: DOCA GPUNetIO Header Copying ===
+
+
+# === @begin: Upstream Device Header Copying ===
+# @NVIDIA_ORIGINAL: @begin: (upstream copies ALL device headers to build dir)
+# @EUGO_CHANGE: We only copy DOCA headers (above). Upstream copies all nccl_device
+# headers and nccl_device.h to the build directory for out-of-tree consumers.
+#
+# file(GLOB_RECURSE SRC_DEVICE_HEADERS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
+#     ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device/*.h)
+#
+# foreach(HEADER_FILE ${SRC_DEVICE_HEADERS})
+#     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${HEADER_FILE}
+#         ${CMAKE_BINARY_DIR}/${HEADER_FILE} COPYONLY)
+#     list(APPEND DEVICE_HEADERS ${CMAKE_BINARY_DIR}/${HEADER_FILE})
+# endforeach()
+#
+# configure_file(${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device.h
+#     ${CMAKE_BINARY_DIR}/include/nccl_device.h COPYONLY)
+# @NVIDIA_ORIGINAL: @end
+# === @end: Upstream Device Header Copying ===
+
+
 # === @begin: `libnccl` library ===
+# @NVIDIA_ORIGINAL: @begin: (upstream source collection pattern)
+# @EUGO_CHANGE: Upstream uses add_subdirectory() + PARENT_SCOPE variables to collect
+# sources from each subdirectory (TRANSPORT_SOURCES, MISC_SOURCES, etc.). We use a flat
+# source list (NCCL_SRC_FILES) in this file instead — see AGENTS.md Rule R3.
+#
+# add_subdirectory(transport)
+# add_subdirectory(misc)
+# add_subdirectory(register)
+# add_subdirectory(graph)
+# add_subdirectory(plugin)
+# add_subdirectory(device)
+# add_subdirectory(nccl_device)
+# add_subdirectory(ras)
+# add_subdirectory(scheduler)
+# add_subdirectory(os)
+# add_subdirectory(gin)
+# add_subdirectory(rma)
+#
+# list(APPEND LIBSRCFILES
+#     ${TRANSPORT_SOURCES} ${MISC_SOURCES} ${REGISTER_SOURCES} ${GRAPH_SOURCES}
+#     ${PLUGIN_SOURCES} ${RAS_SOURCES} ${SYM_SOURCES} ${SCHEDULER_SOURCES}
+#     ${OS_SOURCES} ${GIN_SOURCES} ${DOCA_SOURCES} ${RMA_SOURCES}
+# )
+# @NVIDIA_ORIGINAL: @end
 set(NCCL_SRC_FILES
     # === @begin: ./ (`@/src/CMakeLists.txt`) ===
     allocator.cc
@@ -66,6 +186,7 @@ set(NCCL_SRC_FILES
     misc/socket.cc
     misc/strongstream.cc
     misc/utils.cc
+    misc/git_version.cc
     # === @end: ./misc/ (`@/src/CMakeLists.txt`) ===
 
 
@@ -75,6 +196,7 @@ set(NCCL_SRC_FILES
     plugin/plugin_open.cc
     plugin/profiler.cc
     plugin/tuner.cc
+    plugin/env.cc
     # === @@end: `@/src/plugin/CMakeLists.txt` ===
 
     # === @@begin: `@/src/plugin/net/CMakeLists.txt` ===
@@ -92,6 +214,7 @@ set(NCCL_SRC_FILES
     plugin/profiler/profiler_v3.cc
     plugin/profiler/profiler_v4.cc
     plugin/profiler/profiler_v5.cc
+    plugin/profiler/profiler_v6.cc
     # === @@end: `@/src/plugin/profiler/CMakeLists.txt` ===
 
     # === @@begin: `@/src/plugin/tuner/CMakeLists.txt` ===
@@ -100,19 +223,55 @@ set(NCCL_SRC_FILES
     plugin/tuner/tuner_v4.cc
     plugin/tuner/tuner_v5.cc
     # === @@end: `@/src/plugin/tuner/CMakeLists.txt` ===
+
+    # === @@begin: `@/src/plugin/env/CMakeLists.txt` ===
+    plugin/env/env_v1.cc
+    # === @@end: `@/src/plugin/env/CMakeLists.txt` ===
     # === @end: ./plugin/ ===
 
 
     # === @begin: ./transport/ (`@/src/transport/CMakeLists.txt`) ===
     transport/coll_net.cc
     transport/generic.cc
-    transport/net_ib.cc
-    transport/net_socket.cc
     transport/net.cc
+    transport/net_socket.cc
     transport/nvls.cc
     transport/p2p.cc
     transport/profiler.cc
     transport/shm.cc
+
+    # === @@begin: ./transport/net_ib/ (`@/src/transport/net_ib/CMakeLists.txt`) ===
+    # @EUGO_CHANGE: Upstream v2.29.x split the old transport/net_ib.cc into 7 files.
+    transport/net_ib/common.cc
+    transport/net_ib/connect.cc
+    transport/net_ib/gdr.cc
+    transport/net_ib/gin.cc
+    transport/net_ib/init.cc
+    transport/net_ib/p2p.cc
+    transport/net_ib/reg.cc
+    # === @@end: ./transport/net_ib/ (`@/src/transport/net_ib/CMakeLists.txt`) ===
+
+    # === @@begin: ./transport/net_ib/gdaki/ (`@/src/transport/net_ib/gdaki/CMakeLists.txt`) ===
+    transport/net_ib/gdaki/gin_host_gdaki.cc
+    # === @@end: ./transport/net_ib/gdaki/ (`@/src/transport/net_ib/gdaki/CMakeLists.txt`) ===
+
+    # === @@begin: ./transport/net_ib/gdaki/doca-gpunetio/src/ ===
+    # @EUGO_CHANGE: All 13 .cpp files are pure host code (IB verbs, mlx5dv, dlopen wrappers).
+    # They do not include .cuh headers and do not contain __device__/__global__ qualifiers.
+    transport/net_ib/gdaki/doca-gpunetio/src/doca_gpunetio.cpp
+    transport/net_ib/gdaki/doca-gpunetio/src/doca_gpunetio_gdrcopy.cpp
+    transport/net_ib/gdaki/doca-gpunetio/src/doca_gpunetio_high_level.cpp
+    transport/net_ib/gdaki/doca-gpunetio/src/doca_gpunetio_log.cpp
+    transport/net_ib/gdaki/doca-gpunetio/src/doca_verbs_cq.cpp
+    transport/net_ib/gdaki/doca-gpunetio/src/doca_verbs_cuda_wrapper.cpp
+    transport/net_ib/gdaki/doca-gpunetio/src/doca_verbs_device_attr.cpp
+    transport/net_ib/gdaki/doca-gpunetio/src/doca_verbs_ibv_wrapper.cpp
+    transport/net_ib/gdaki/doca-gpunetio/src/doca_verbs_mlx5dv_wrapper.cpp
+    transport/net_ib/gdaki/doca-gpunetio/src/doca_verbs_qp.cpp
+    transport/net_ib/gdaki/doca-gpunetio/src/doca_verbs_srq.cpp
+    transport/net_ib/gdaki/doca-gpunetio/src/doca_verbs_uar.cpp
+    transport/net_ib/gdaki/doca-gpunetio/src/doca_verbs_umem.cpp
+    # === @@end: ./transport/net_ib/gdaki/doca-gpunetio/src/ ===
     # === @end: ./transport/ (`@/src/transport/CMakeLists.txt`) ===
 
 
@@ -159,17 +318,45 @@ set(NCCL_SRC_FILES
     # === @begin: ./nccl_device/ (`@/src/nccl_device/CMakeLists.txt`, `SYM_SOURCES`) ===
     nccl_device/core.cc
     nccl_device/ll_a2a.cc
-    nccl_device/mem_barrier.cc
+    nccl_device/lsa_barrier.cc
+    nccl_device/gin_barrier.cc
     # === @end: ./nccl_device/ (`@/src/nccl_device/CMakeLists.txt`, `SYM_SOURCES`) ===
 
 
     # === @begin: ./scheduler/ (`@/src/scheduler/CMakeLists.txt`) ===
+    scheduler/allgatherv_sched.cc
     scheduler/symmetric_sched.cc
     # === @end: ./scheduler/ (`@/src/scheduler/CMakeLists.txt`) ===
+
+
+    # === @begin: ./gin/ (`@/src/gin/CMakeLists.txt`) ===
+    gin/gin_host.cc
+    gin/gin_host_proxy.cc
+    # === @end: ./gin/ (`@/src/gin/CMakeLists.txt`) ===
+
+
+    # === @begin: ./os/ (`@/src/os/CMakeLists.txt`) ===
+    os/linux.cc
+    # os/windows.cc  # Not compiled on Linux
+    # === @end: ./os/ (`@/src/os/CMakeLists.txt`) ===
+
+
+    # === @begin: ./rma/ (`@/src/rma/CMakeLists.txt`) ===
+    rma/rma.cc
+    rma/rma_ce.cc
+    rma/rma_proxy.cc
+    # === @end: ./rma/ (`@/src/rma/CMakeLists.txt`) ===
 )
+
+# @NVIDIA_ORIGINAL: @begin: (upstream macro prefix map)
+# @EUGO_CHANGE: Not currently used in our build. Strips source path from __FILE__ macros.
+# add_compile_options(-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=)
+# @NVIDIA_ORIGINAL: @end
 
 add_library(nccl SHARED ${NCCL_SRC_FILES})
 
+# Ensure git_version.h is generated before compiling
+add_dependencies(nccl generate_git_version)
 
 target_compile_definitions(
     nccl
@@ -190,16 +377,29 @@ target_compile_definitions(
     PRIVATE
         CUDAToolkit_VERSION_MAJOR=${CUDAToolkit_VERSION_MAJOR}
         CUDAToolkit_VERSION_MINOR=${CUDAToolkit_VERSION_MINOR}
+        # @EUGO_CHANGE: DOCA wrapper defines - use dlopen instead of direct infiniband/verbs.h
+        # These MUST be on the target (not add_definitions) to propagate to clang-scan-deps
+        # @EUGO_CHANGE: also, NVIDIA forgot to add `DOCA_VERBS_USE_IBV_WRAPPER` which is needed for `ibv` wrapper to work, so adding it here...
+        DOCA_VERBS_USE_CUDA_WRAPPER=1
+        DOCA_VERBS_USE_NET_WRAPPER=1
+        DOCA_VERBS_USE_IBV_WRAPPER=1
+        NCCL_GIN_PROXY_ENABLE=1
 )
 # @NVIDIA_ORIGINAL: @end
 
 
 # `WHOLE_ARCHIVE` is needed as `nccl_colldevice` is a static library and we want to get all its symbols!
+# @NVIDIA_ORIGINAL: target_link_libraries(nccl PRIVATE nccl_device ...)
+# @EUGO_CHANGE: Upstream uses `nccl_device` target name. We use `nccl_colldevice`
+# (defined in src/device/CMakeLists.txt) with WHOLE_ARCHIVE.
 target_link_libraries(nccl PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,nccl_colldevice>")
 
 
 # @Important:
 # We couldn't use `NCCL_DEPENDENCIES` list here, as `cudart` is used in `nccl` interface while `cccl` is a header-only library only used as an implementation detail, so they must go into different section to avoid breaking downstream packages build failures or runtime UB!
+# @NVIDIA_ORIGINAL: target_link_libraries(nccl PRIVATE nccl_device pthread rt dl ${CUDAToolkit_LIBRARIES} ${EXTRA_LIBS})
+# @EUGO_CHANGE: We use CMake imported targets instead of raw library names.
+# pthread/rt/dl are merged into glibc on modern systems (see root CMakeLists.txt).
 target_link_libraries(
     nccl
     PRIVATE CCCL::libcudacxx
@@ -212,6 +412,19 @@ set_target_properties(
     PROPERTIES
         VERSION ${NCCL_VERSION}
         SOVERSION ${NCCL_MAJOR}
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+)
+
+
+# @EUGO_CHANGE: Version script controls symbol visibility — only nccl*/pnccl* are exported.
+# Without this, all internal symbols leak into the .so's dynamic symbol table.
+# $<HOST_LINK:> prevents this flag from leaking into the CUDA device link compilation step,
+# which would cause: clang++: warning: -Wl,--version-script=...: 'linker' input unused
+# NOTE: Must use LINKER: prefix instead of -Wl, because the comma inside $<HOST_LINK:>
+# is parsed as a generator-expression list separator, splitting "-Wl,--version-script=..."
+# into two tokens: "-Wl" and "--version-script=..." (which clang rejects as unknown argument).
+target_link_options(nccl PRIVATE
+    "$<HOST_LINK:LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnccl.map>"
 )
 
 
@@ -221,19 +434,102 @@ target_include_directories(
         $<BUILD_INTERFACE:${CONFIGURED_HEADERS_DIR}>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/plugin>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/os>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    PRIVATE
+        # @EUGO_CHANGE: DOCA host headers (doca_gpunetio_host.h) needed by gin_host_gdaki.cc
+        ${DOCA_HOME}/include
+        ${DOCA_HOME}/include/host
 )
 
 
-# Only nccl.h and nccl_net.h are public headers and only they are installed!
+# Only nccl.h, nccl_device.h, and nccl_device/* are public headers and only they are installed!
+# nccl.h and nccl_device.h go into NCCL_PUBLIC_HEADERS (installed flat via `install(FILES ...)`).
+# nccl_device/ is exported as NCCL_DEVICE_HEADERS_DIR and installed via `install(DIRECTORY ...)`
+# in the parent to preserve the full subdirectory tree (e.g. nccl_device/gin/gdaki/...).
 set(NCCL_PUBLIC_HEADERS
     ${CONFIGURED_HEADERS_DIR}/nccl.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin/nccl_net.h
+    # We used to need this, but its now not needed...
+    # ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin/nccl_net.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device.h
+    PARENT_SCOPE
+)
+set(NCCL_DEVICE_HEADERS_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device"
     PARENT_SCOPE
 )
 # === @end: `libnccl` library ===
 
 
+# === @begin: `nccl_static` library ===
+# @NVIDIA_ORIGINAL: @begin: (upstream static library target)
+# @EUGO_CHANGE: Static library not built in Eugo environment, but preserved for reference.
+#
+# add_library(nccl_static STATIC ${LIBSRCFILES})
+#
+# target_include_directories(nccl_static PUBLIC
+#     ${CMAKE_CURRENT_SOURCE_DIR}/device
+#     ${CMAKE_CURRENT_SOURCE_DIR}/include
+#     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
+#     ${CMAKE_CURRENT_SOURCE_DIR}/include/os
+#     ${CUDAToolkit_INCLUDE_DIRS}
+#     transport/net_ib/gdaki/doca-gpunetio/include
+#     ${CUDAToolkit_INCLUDE_DIRS}/cccl
+# )
+#
+# add_dependencies(nccl_static nccl_header)
+# add_dependencies(nccl_static generate_git_version)
+#
+# target_link_libraries(nccl_static
+#     PRIVATE
+#     nccl_device
+#     pthread
+#     rt
+#     dl
+#     ${CUDAToolkit_LIBRARIES}
+#     ${EXTRA_LIBS}
+# )
+#
+# set_target_properties(nccl_static PROPERTIES
+#     CUDA_SEPARABLE_COMPILATION ON
+#     CUDA_RESOLVE_DEVICE_SYMBOLS ON
+#     CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+#     POSITION_INDEPENDENT_CODE ON
+# )
+#
+# set_target_properties(nccl_static PROPERTIES
+#     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+# )
+# @NVIDIA_ORIGINAL: @end
+# === @end: `nccl_static` library ===
+
+
 # === @begin: ras/ ===
+# @NVIDIA_ORIGINAL: @begin: (upstream defines ncclras inline in src/CMakeLists.txt)
+# @EUGO_CHANGE: We use add_subdirectory(ras) which has its own CMakeLists.txt.
+# Upstream's inline definition is preserved here for reference.
+#
+# set(RAS_BINSRCFILES ras/client.cc)
+#
+# add_executable(ncclras ${RAS_BINSRCFILES})
+#
+# target_include_directories(ncclras PUBLIC
+#     ${CMAKE_BINARY_DIR}/include
+#     ${CUDAToolkit_INCLUDE_DIRS}
+# )
+#
+# add_dependencies(ncclras nccl_header)
+#
+# target_link_libraries(ncclras
+#     PRIVATE
+#     pthread
+#     rt
+#     dl
+# )
+#
+# set_target_properties(ncclras PROPERTIES
+#     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+# )
+# @NVIDIA_ORIGINAL: @end
 add_subdirectory(ras)
 # === @end: ras/ ===

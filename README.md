@@ -12,6 +12,22 @@ This is unlikely to work with NVIDIA NVCC compiler.
     1. Wherever NCCL adds new source files, headers, etc, we need to add them to the appropriate existing CMake targets, or introduce brand new ones.
     2. We need to compare (`diff` or `BeyondCompare`) the new `src/` structure with the one prior syncing with upstream repo.
         1. RETODO: Script to automatically compare the new `src/` structure with the one prior syncing with upstream repo.
+3. If any new CMake `option(...)`, `set(STRING CACHE...)`, or other variants of CMake configuration options are introduced in upstream, we should evaluate either we want it or not and reduce to the selected path.
+   1. That is if we want to use this variable, we should comment out the branch in all CMake conditional statements where it's opposite value is used. Otherwise, do the opposite.
+    ```cmake
+    # if(EMIT_LLVM_IR)
+    add_subdirectory(ir)
+    add_dependencies(llvm_ir nccl_header)
+    add_custom_target(nccl_with_ir ALL DEPENDS nccl llvm_ir)
+    message(STATUS "LLVM IR generation will be included in default build")
+    # endif()
+    ```
+    2. If there is an associated `-D` C/C++/CUDA macros this option sets, we need to set it manually via `NCCL_COMMON_COMPILE_DEFINITIONS`.
+    ```cmake
+    if(EMIT_LLVM_IR)
+        add_definitions(-DEMIT_LLVM_IR=1)
+    endif()
+    ```
 
 ## NCCLRas
 

@@ -89,15 +89,18 @@ NCCL_HOST_DEVICE_INLINE ncclSymPtr<T>& ncclSymPtr<T>::operator-=(unsigned long l
   return *this;
 }
 
-// @EUGO_CHANGE: `#if` -> `#ifdef`
+// @EUGO_CHANGE: `#if NCCL_CHECK_CUDACC` -> `#ifdef __CUDACC__` for clang compatibility
 #ifdef __CUDACC__
 template<typename T>
 NCCL_DEVICE_INLINE T* ncclSymPtr<T>::localPtr() const {
-  return (T*)ncclGetLocalPointer(window, offset);
+  if (window) {
+    return (T*)ncclGetLocalPointer(window, offset);
+  } else {
+    return (T*)offset;
+  }
 }
 #endif
 
-// @EUGO_CHANGE: `#if` -> `#ifdef`
 #ifdef __CUDACC__
 template<typename T>
 NCCL_DEVICE_INLINE T* ncclSymPtr<T>::lsaPtr(int peer) const {
@@ -105,7 +108,6 @@ NCCL_DEVICE_INLINE T* ncclSymPtr<T>::lsaPtr(int peer) const {
 }
 #endif
 
-// @EUGO_CHANGE: `#if` -> `#ifdef`
 #ifdef __CUDACC__
 template<typename T>
 NCCL_DEVICE_INLINE T* ncclSymPtr<T>::peerPtr(int peer) const {
@@ -113,7 +115,6 @@ NCCL_DEVICE_INLINE T* ncclSymPtr<T>::peerPtr(int peer) const {
 }
 #endif
 
-// @EUGO_CHANGE: `#if` -> `#ifdef`
 #ifdef __CUDACC__
 template<typename T>
 NCCL_DEVICE_INLINE T* ncclSymPtr<T>::peerPtr(ncclTeam team, int peer) const {
@@ -121,7 +122,6 @@ NCCL_DEVICE_INLINE T* ncclSymPtr<T>::peerPtr(ncclTeam team, int peer) const {
 }
 #endif
 
-// @EUGO_CHANGE: `#if` -> `#ifdef`
 #ifdef __CUDACC__
 template<typename T>
 NCCL_DEVICE_INLINE T* ncclSymPtr<T>::multimemPtr(ncclMultimemHandle mmHandle) const {
@@ -129,7 +129,6 @@ NCCL_DEVICE_INLINE T* ncclSymPtr<T>::multimemPtr(ncclMultimemHandle mmHandle) co
 }
 #endif
 
-// @EUGO_CHANGE: `#if` -> `#ifdef`
 #ifdef __CUDACC__
 template<typename T>
 NCCL_DEVICE_INLINE T* ncclSymPtr<T>::lsaMultimemPtr(ncclDevComm const& comm) const {

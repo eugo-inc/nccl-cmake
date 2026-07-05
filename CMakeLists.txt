@@ -62,6 +62,11 @@ set(CMAKE_CUDA_FLAGS
   " $ENV{CUDAFLAGS}"
 )
 
+# @EUGO_CHANGE: we only support Linux so need to detect OS
+# Detect OS
+set(NCCL_OS_LINUX ON)
+add_definitions(-DNCCL_OS_LINUX)
+
 # @EUGO_CHANGE:
 # Disabled as we prefer to control warnings by using our global / shared flags.
 # set(CMAKE_CXX_FLAGS
@@ -74,6 +79,10 @@ set(CMAKE_CUDA_FLAGS
 
 
 # === @begin: Warnings Configuration ===
+# @NVIDIA_ORIGINAL: @begin: (upstream compiler flags - nvcc-specific, not compatible with clang)
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden -Wall -Wno-unused-function -Wno-sign-compare -Wvla -g")
+# set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all -fPIC")
+# @NVIDIA_ORIGINAL: @end
 set(
     EUGO_COMMON_WARNING_FLAGS
     "-Wno-deprecated-this-capture \
@@ -85,11 +94,51 @@ set(
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EUGO_COMMON_WARNING_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EUGO_COMMON_WARNING_FLAGS}")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} ${EUGO_COMMON_WARNING_FLAGS}")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3")
+set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS} -O3")
 # === @end: Warnings Configuration ===
 
 
-# === @begin: Options ===
+# === @begin: Build Options ===
+
+# @Important:
+# In original code, most of these flags are CMake options. We reduce them to -D for ones which we use and omit others to reduce the complexity of our build as we support only 1 platform and only 1 compiler, making our life easier. Much easier.
+
+# @NVIDIA_ORIGINAL: @begin: (upstream uses option() calls)
+# option(BUILD_DEBIAN_PACKAGE "Build Debian package" OFF)
+# option(BUILD_REDHAT_PACKAGE "Build Redhat package" OFF)
+# option(BUILD_TXZ_PACKAGE "Build TXZ package" OFF)
+# option(BUILD_CONDA_PACKAGE "Build Conda package" OFF)
+# option(BUILD_SRCTXZ_PACKAGE "Build source tarball package" OFF)
+# option(BUILD_DOC_PACKAGE "Build documentation package" OFF)
+# option(BUILD_PACKAGES "Build all packages" OFF)
+# option(VERBOSE "Enable verbose output" OFF)
+# option(KEEP "Keep intermediate files" OFF)
+# option(DEBUG "Enable debug build" OFF)
+# option(ASAN "Enable Address Sanitizer" OFF)
+# option(UBSAN "Enable Undefined Behavior Sanitizer" OFF)
+# option(TRACE "Enable tracing" OFF)
+# option(WERROR "Treat warnings as errors" OFF)
+# option(PROFAPI "Enable profiling API" ON)
+# option(NVTX "Enable NVTX" ON)
+# option(RDMA_CORE "Enable RDMA core" OFF)
+# option(NET_PROFILER "Enable network profiler" OFF)
+# option(MLX5DV "Enable MLX5DV" OFF)
+# option(MAX_EXT_NET_PLUGINS "Maximum external network plugins" 0)
+# option(EMIT_LLVM_IR "Generate LLVM IR for device APIs" OFF)
+# @NVIDIA_ORIGINAL: @end
+#
+# @EUGO_CHANGE: We use a flat compile definitions list for the subset of options
+# that map to C/C++ macros. Options without corresponding macros (packaging, sanitizers,
+# verbosity) are in the upstream option() block above for reference only.
 set(NCCL_COMMON_COMPILE_DEFINITIONS
+    # BUILD_DEBIAN_PACKAGE=OFF # Build Debian package
+    # BUILD_REDHAT_PACKAGE=OFF # Build Redhat package
+    # BUILD_TXZ_PACKAGE=OFF # Build TXZ package
+    # BUILD_CONDA_PACKAGE=OFF # Build Conda package
+    # BUILD_SRCTXZ_PACKAGE=OFF # Build source tarball package
+    # BUILD_DOC_PACKAGE=OFF # Build documentation package
+    # BUILD_PACKAGES=OFF # Build all packages
     # VERBOSE=1 # "Enable verbose output" [there is no associated C/C++ macro], disabled as this only applies to Make/CMake verbosity in original implementation
     # KEEP=1 # "Keep intermediate files" [there is no associated C/C++ macro], disabled as this only applies to original implementation and its Make/CMake execution
     # ASAN=1 # "Enable Address Sanitizer" [there is no associated C/C++ macro], not yet supported in Eugo environment
@@ -119,7 +168,56 @@ set(NCCL_COMMON_COMPILE_DEFINITIONS
 
     # NCCL_ENABLE_NET_PROFILING=1 # "Enable network profiler"  [option: `NET_PROFILER`], disabled by default + causes building an extra plugin which isn't easy to build and maintain + all 3 shipped plugins are considered tests/examples of NCCL usage and not something NCCL really needs to operate properly.
     # NCCL_NET_MAX_PLUGINS=0 # "Maximum external network plugins" [option: `MAX_EXT_NET_PLUGINS=<int>`], this is set to `0` by default, meaning no extra plugins can be loaded, which makes sense as we're not building any of them.
+
+    # EMIT_LLVM_IR=1 # Generate LLVM IR for device APIs" [option: `EMIT_LLVM_IR`], this is used in `@/bindings/ir/` subdirectory so it can be used by code generation packages to enable calling NCCL APIs w/o the roundtrip to the host. However, as of now we don't have such packages so we don't enable it yet.
+
+    EUGO_NCCL_NVML_DIRECT_HEADER=1 # Eugo-specific: allows using `nvml.h` from the system but still load `libnvidia-ml` dynamically via `dlopen`. This is safe in Eugo Environment as we always have one and only one version of this library in a given version and it's better to have all APIs set for efficiency rather than not.
 )
+
+# === @begin:Options conditionals ===
+# @NVIDIA_ORIGINAL: @begin: (upstream package building subdirectories)
+# @EUGO_CHANGE: Not needed in Eugo environment, but preserved for reference.
+# NOTE: all of these are commented out because we don't build them
+# if(MAX_EXT_NET_PLUGINS GREATER 0)
+#     add_definitions(-DNCCL_NET_MAX_PLUGINS=${MAX_EXT_NET_PLUGINS})
+# endif()
+# Add package building subdirectories (commented out as not needed in Eugo environment, but preserved for the reference implementation)
+# if(BUILD_DEBIAN_PACKAGE OR BUILD_PACKAGES)
+    # add_subdirectory(pkg/debian)
+# endif()
+
+# if(BUILD_REDHAT_PACKAGE OR BUILD_PACKAGES)
+    # add_subdirectory(pkg/redhat)
+# endif()
+
+# if(BUILD_TXZ_PACKAGE OR BUILD_PACKAGES)
+    # add_subdirectory(pkg/txz)
+# endif()
+
+# if(BUILD_CONDA_PACKAGE OR BUILD_PACKAGES)
+    # add_subdirectory(pkg/conda)
+# endif()
+
+# if(BUILD_SRCTXZ_PACKAGE OR BUILD_PACKAGES)
+    # add_subdirectory(pkg/srctxz)
+# endif()
+
+
+# === @@begin: EMIT_LLVM_IR ===
+# if(EMIT_LLVM_IR)
+#     add_subdirectory(ir)
+#     add_dependencies(llvm_ir nccl_header)
+#     add_custom_target(nccl_with_ir ALL DEPENDS nccl llvm_ir)
+#     message(STATUS "LLVM IR generation will be included in default build")
+# endif()
+
+# if(EMIT_LLVM_IR)
+#     add_definitions(-DEMIT_LLVM_IR=1)
+# endif()
+# === @@end: EMIT_LLVM_IR ===
+# === @end: Option Conditionals ===
+# @NVIDIA_ORIGINAL: @end
+
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     list(APPEND NCCL_COMMON_COMPILE_DEFINITIONS
@@ -130,15 +228,66 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 
         # TRACE=1 # "Enable tracing" [there is no associated C/C++ macro], this implies the following individual macros:
         ENABLE_TRACE=1
+        set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0")
+        set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS} -O0 -G -g")
     )
 endif()
-# === @end: Options ===
+# === @end: Build Options ===
 
 
 # === @begin: dependencies/ ===
 # === @@begin: CUDAToolkit ===
 find_package(CUDAToolkit REQUIRED)
 message(STATUS "[EUGO]: Find CUDAToolkit: ${CUDAToolkit_CONFIG}")
+
+# @NVIDIA_ORIGINAL: @begin: (upstream CUDA version detection)
+# @EUGO_CHANGE: Upstream extracts CUDA_MAJOR/CUDA_MINOR from CUDAToolkit_VERSION string
+# and uses them as global compile definitions. We instead use CMake's
+# CUDAToolkit_VERSION_MAJOR/CUDAToolkit_VERSION_MINOR (set automatically by find_package)
+# as PRIVATE target_compile_definitions in src/CMakeLists.txt.
+#
+# string(REGEX MATCH "([0-9]+\\.[0-9]+)" CUDA_VERSION "${CUDAToolkit_VERSION}")
+# string(REGEX MATCH "([0-9]+)" CUDA_MAJOR "${CUDA_VERSION}")
+# string(REGEX REPLACE ".*\\.([0-9]+)$" "\\1" CUDA_MINOR "${CUDA_VERSION}")
+#
+# add_compile_definitions(
+#     CUDA_MAJOR=${CUDA_MAJOR}
+#     CUDA_MINOR=${CUDA_MINOR}
+# )
+# @NVIDIA_ORIGINAL: @end
+
+# @NVIDIA_ORIGINAL: @begin: (upstream CUDA architecture auto-detection)
+# @EUGO_CHANGE: We set CMAKE_CUDA_ARCHITECTURES externally via toolchain file or
+# command-line (-DCMAKE_CUDA_ARCHITECTURES=...) so this auto-detection is not needed.
+#
+# if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "")
+#     message(STATUS "CMAKE_CUDA_ARCHITECTURES not defined, setting defaults based on CUDA version")
+#     if(${CUDA_MAJOR} LESS 9)
+#         set(CMAKE_CUDA_ARCHITECTURES "35;50;60;61")
+#     elseif(${CUDA_MAJOR} EQUAL 9)
+#         set(CMAKE_CUDA_ARCHITECTURES "35;50;60;61;70")
+#     elseif(${CUDA_MAJOR} EQUAL 10)
+#         set(CMAKE_CUDA_ARCHITECTURES "35;50;60;61;70")
+#     elseif(${CUDA_MAJOR} EQUAL 11)
+#         if(${CUDA_MINOR} LESS 8)
+#             set(CMAKE_CUDA_ARCHITECTURES "35;50;60;61;70;80")
+#         else()
+#             set(CMAKE_CUDA_ARCHITECTURES "35;50;60;61;70;80;90")
+#         endif()
+#     elseif(${CUDA_MAJOR} EQUAL 12)
+#         if(${CUDA_MINOR} LESS 8)
+#             set(CMAKE_CUDA_ARCHITECTURES "50;60;61;70;80;90")
+#         else()
+#             set(CMAKE_CUDA_ARCHITECTURES "50;60;61;70;80;90;100;120")
+#         endif()
+#     elseif(${CUDA_MAJOR} EQUAL 13)
+#         set(CMAKE_CUDA_ARCHITECTURES "50;60;61;70;80;90;100;110;120")
+#     else()
+#         set(CMAKE_CUDA_ARCHITECTURES "50;60;61;70;80;90;100;110;120")
+#     endif()
+# endif()
+# message(STATUS "Using CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
+# @NVIDIA_ORIGINAL: @end
 # === @@end: CUDAToolkit ===
 
 
@@ -161,11 +310,62 @@ message(STATUS "[EUGO]: CCCL found: ${cccl_CONFIG}")
 # option(RDMA_CORE "Enable RDMA core" OFF) # Sets `NCCL_BUILD_RDMA_CORE=1` macro and links `libibverbs` (`native/rdma_core`)
 # option(MLX5DV "Enable MLX5DV" OFF) # Sets `NCCL_BUILD_MLX5DV=1` macro and links `libmlx5` (`native/rdma_core`)
 # === @@end: Discarded dependencies ===
+# === @@begin: Sanitizer Options ===
+# @NVIDIA_ORIGINAL: @begin: (upstream sanitizer support)
+# @EUGO_CHANGE: Not yet supported in Eugo environment.
+#
+# if(ASAN)
+#     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
+#     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address -static-libasan")
+# endif()
+#
+# if(UBSAN)
+#     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=undefined")
+#     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=undefined -static-libubsan")
+# endif()
+# @NVIDIA_ORIGINAL: @end
+# === @@end: Sanitizer Options ===
+
+
+# === @@begin: EXTRA_LIBS and Library Dependencies ===
+# @NVIDIA_ORIGINAL: @begin: (upstream library dependencies)
+# @EUGO_CHANGE: In modern glibc, librt/libpthread/libdl are merged into libc.so.
+# We don't need to find or link them separately. RDMA_CORE and MLX5DV are not
+# used in our environment.
+#
+# set(EXTRA_LIBS)
+#
+# if(RDMA_CORE)
+#     add_definitions(-DNCCL_BUILD_RDMA_CORE=1)
+#     find_library(VERBS_LIBRARY NAMES verbs)
+#     if(VERBS_LIBRARY)
+#         list(APPEND EXTRA_LIBS ${VERBS_LIBRARY})
+#     endif()
+# endif()
+#
+# if(MLX5DV)
+#     add_definitions(-DNCCL_BUILD_MLX5DV=1)
+#     find_library(MLX5_LIBRARY NAMES mlx5)
+#     if(MLX5_LIBRARY)
+#         list(APPEND EXTRA_LIBS ${MLX5_LIBRARY})
+#     endif()
+# endif()
+#
+# if(NET_PROFILER)
+#     add_definitions(-DNCCL_ENABLE_NET_PROFILING=1)
+# endif()
+#
+# find_library(RT_LIBRARY NAMES rt)
+# if(RT_LIBRARY)
+#     list(APPEND EXTRA_LIBS ${RT_LIBRARY})
+# endif()
+# @NVIDIA_ORIGINAL: @end
+# === @@end: EXTRA_LIBS and Library Dependencies ===
 
 
 # === @@begin: Finalized dependencies list ===
 # @EUGO_CHANGE:
-# In original implementation, they link their binaries against all `CUDAToolkit_LIBRARIES` which is an overkill. Based on our research, they only use `cudart` functions here to manage the GPU on the host side and directly access intrinsics (like `fp8`) on the device one.
+# In original implementation, they link their binaries against all `CUDAToolkit_LIBRARIES` which is overkill. Based on our research, they only use `cudart` functions here to manage the GPU on the host side and directly access intrinsics (like `fp8`) on the device one.
 # They also rely on `CCCL` (in particular, `libcu++`/`libcudacxx`) but as it's the header only library, they just add that into include dirs list and don't explicitely search for it.
 #
 # In our NCCL implementation, we limit dependencies list to that is exactly used to avoid too tight dependency graph and reduce the number of unneeded libraries loaded at runtime.
@@ -175,14 +375,62 @@ message(STATUS "[EUGO]: CCCL found: ${cccl_CONFIG}")
 #
 # @Important:
 # Based on our research, NCCL doesn't directly depend on `libcuda` (`CUDA::driver_library`) so we don't add it here (or `cudadevrt`).
+# NCCL dynamically loads the CUDA driver API — it never links against it directly. This is a common pattern for libraries that want to support multiple versions of CUDA without requiring users to have a specific version of the CUDA driver installed at build time.
+# For example, `DECLARE_CUDA_PFN_EXTERN(cuMemGetHandleForAddressRange, 11070); // expands to: extern PFN_cuMemGetHandleForAddressRange_v11070 pfn_cuMemGetHandleForAddressRange` is just a pointer declaration for a function that may be loaded at runtime if available, but it's not linked against `libcuda` at build time.
+
+# @ EUGO_CHANGE: @begin: Makes the system-wide `nvml.h` visible to all targets. Needed for `EUGO_NCCL_NVML_DIRECT_HEADER=1` support.
+include_directories("${CUDAToolkit_INCLUDE_DIRS}")
+# @ EUGO_CHANGE: @end
+
 set(NCCL_DEPENDENCIES CCCL::libcudacxx CUDA::cudart)
 # === @@end: Finalized dependencies list ===
 # === @end: dependencies/ ===
 
-
 # === @begin: src/ ===
 add_subdirectory(src)
 # === @end: src/ ===
+
+# === @begin: @NVIDIA_ORIGINAL: ===
+# @Important:
+# We don't build these plugins as they're primarly used for examples and testing:
+# 1. Moreover, official `nvidia_nccl_cu13` PyPi wheel doesn't ship them either.
+# 2. `ext-net` was used as a foundation by AWS `nccl-ofi-plugin`.
+# 3. And the default install target doesn't install them either.
+#
+# # === @begin: ext-mixed/ ===
+# add_subdirectory(ext-mixed/example)
+# # === @end: ext-mixed/ ===
+#
+# # === @begin: ext-net/ ===
+# add_subdirectory(ext-net)
+# # === @end: ext-net/ ===
+#
+# # === @begin: ext-profiler/ ===
+# add_subdirectory(ext-profiler/example)
+# # === @end: ext-profiler/ ===
+#
+# # === @begin: ext-tuner/ ===
+# add_subdirectory(ext-tuner/example)
+# # === @end: ext-tuner/ ===
+#
+# # === @begin: ext-env/ ===
+# add_subdirectory(ext-env/example)
+# # === @end: ext-env/ ===
+# === @end: @NVIDIA_ORIGINAL ===
+#
+# === @end: Subdirectories ===
+
+
+# === @begin: DOCA Definitions / @NVIDIA_ORIGINAL: @begin: ===
+# add_definitions(-DDOCA_VERBS_USE_CUDA_WRAPPER)
+# add_definitions(-DDOCA_VERBS_USE_NET_WRAPPER)
+# add_definitions(-DNCCL_GIN_PROXY_ENABLE=1)
+# @NVIDIA_ORIGINAL: @end
+# @EUGO_CHANGE: DOCA defines moved to target_compile_definitions() in src/CMakeLists.txt
+# to ensure they propagate to clang-scan-deps. See src/CMakeLists.txt for the actual defines:
+#   DOCA_VERBS_USE_CUDA_WRAPPER, DOCA_VERBS_USE_NET_WRAPPER, DOCA_VERBS_USE_IBV_WRAPPER, NCCL_GIN_PROXY_ENABLE
+# Note: upstream is MISSING DOCA_VERBS_USE_IBV_WRAPPER which is required for ibv wrapper to work.
+# === @end: DOCA Definitions ===
 
 
 # === @begin: Install and Configuration Targets ===
@@ -191,6 +439,23 @@ include(GNUInstallDirs)
 # Install the headers into the include directory
 install(FILES ${NCCL_PUBLIC_HEADERS} TYPE INCLUDE)
 
+# @EUGO_CHANGE: @EUGO_NOTE: Only `nccl` (libnccl.so) and `ncclras` are installed as shippable artifacts.
+# The five targets from the ext-*/example add_subdirectory() calls above are intentionally
+# NOT listed here:
+#   - libnccl-mixed-example.so     → ${CMAKE_BINARY_DIR}/test/unit/plugins/
+#   - libnccl-net-example.so       → ${CMAKE_BINARY_DIR}/test/unit/plugins/
+#   - libnccl-profiler-example.so  → ${CMAKE_BINARY_DIR}/lib/ (POST_BUILD copy → test/unit/plugins/)
+#   - libnccl-tuner-example.so     → ${CMAKE_BINARY_DIR}/test/unit/plugins/
+#   - libnccl-env-example.so       → ${CMAKE_BINARY_DIR}/test/unit/plugins/
+# These are NVIDIA's reference/example plugins — scaffolding for external developers writing
+# their own plugins — not production artifacts. Our production deployments load different
+# plugins at runtime (e.g., aws-ofi-nccl for EFA via NCCL_NET_PLUGIN), built and installed as
+# separate packages outside this tree. Shipping the examples would pollute the install prefix
+# and risk accidental dlopen() by NCCL's plugin chain looking for libnccl-net.so /
+# libnccl-tuner.so / libnccl-profiler.so / libnccl-env.so.
+#
+# If a test harness needs them outside the build tree, reference ${CMAKE_BINARY_DIR} directly
+# rather than installing here.
 install(
     TARGETS nccl ncclras # `nccl_colldevice` isn't installed separately but used as a private implementation detail for `nccl`
     EXPORT NCCLConfig
@@ -200,7 +465,7 @@ install(
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
-# @HELP: Implement pkg-config guy and adjust our cmake stuff in a compatible way!
+# @TODO+: Implement pkg-config guy and adjust our cmake stuff in a compatible way!
 install(
     EXPORT NCCLConfig
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nccl
@@ -220,14 +485,3 @@ install(
 # )
 # @EUGO_CHANGE: @end
 
-
-# NOTE: This is the install target output!
-# -- Installing: /usr/local/include/nccl.h
-# -- Up-to-date: /usr/local/include/nccl_net.h
-# -- Installing: /usr/local/lib64/libnccl.so.2.16.2.1
-# -- Installing: /usr/local/lib64/libnccl.so.2
-# -- Installing: /usr/local/lib64/libnccl.so
-# -- Installing: /usr/local/bin/ncclras
-# -- Installing: /usr/local/lib64/cmake/nccl/NCCLConfig.cmake
-# -- Installing: /usr/local/lib64/cmake/nccl/NCCLConfig-release.cmake
-# === @end: Install Targets ===

@@ -187,11 +187,12 @@ NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::recvUnrolled(int eltStart, int e
 
 // @EUGO_CHANGE: `#if` -> `#ifdef`
 #ifdef __CUDACC__
-template<typename Coop>
-template<int Unroll, typename Elt, typename EltToAcc, typename Reduce>
+template <typename Coop>
+template <int Unroll, typename Elt, typename EltToAcc, typename Reduce>
 NCCL_DEVICE_INLINE auto ncclLLA2ASession<Coop>::recvReduce(
     int eltStart, int eltCount, int eltStride, EltToAcc eltToAcc, Reduce reduce
-  ) -> decltype(eltToAcc(cuda::std::declval<Elt>())) { // @EUGO_CHANGE: `nccl::utility::declval` -> `cuda::std::declval`
+  ) -> decltype(eltToAcc(cuda::std::declval<Elt>())) // @EUGO_CHANGE: `nccl::utility::declval` -> `cuda::std::declval`
+{
   using Acc = decltype(eltToAcc(cuda::std::declval<Elt>())); // @EUGO_CHANGE: `nccl::utility::declval` -> `cuda::std::declval`
   Acc acc;
   int i = 0;
