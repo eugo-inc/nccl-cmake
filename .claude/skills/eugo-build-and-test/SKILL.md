@@ -41,7 +41,7 @@ ninja -C eugo_build
   configures in `${EUGO_OUT_OF_SOURCE_BUILD_DIRECTORY_NAME}` with
   `${EUGO_CMAKE_COMMON_OPTIONS}` + `-DCMAKE_INSTALL_PREFIX=${EUGO_INSTALL_PREFIX_PATH}`.
   The harness injects Ninja generator, Release, C/CXX/CUDA standards,
-  CMAKE_PREFIX_PATH, `CMAKE_INSTALL_LIBDIR=lib`, and PIC via that variable.
+  CMAKE_PREFIX_PATH, the canonical libdir (`CMAKE_INSTALL_LIBDIR=lib64` per `eugo.std` `CANONICAL_INSTALL_LIBDIR`), and PIC via that variable.
 - Sibling cmake packages end setup with `ninja -vvv && ninja install -vvv`; as of
   2026-07 cuda_nccl's setup stops after configure - if a harness build installs
   nothing, add those two lines protomolecule-side (that file, not this repo).
@@ -56,7 +56,7 @@ ninja -C eugo_build
 - Artifacts: `eugo_build/src/libnccl.so.2.<minor>.<patch>` (+ `.so.2`, `.so`
   symlinks), `eugo_build/src/ras/ncclras`. Install adds `nccl.h`,
   `nccl_device.h`, the `nccl_device/` header dir, and the `NCCLConfig` CMake
-  export under `lib/cmake/nccl` (no .pc file - pkg-config is disabled on purpose).
+  export under `lib64/cmake/nccl` (no .pc file - pkg-config is disabled on purpose).
 - Only `nccl` and `ncclras` install; the five ext-*/example plugins stay in the
   build tree by design.
 

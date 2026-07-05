@@ -42,7 +42,7 @@ section 1. This skill is the diff-time checklist; that doc is the rationale.
    `NCCLConfig` export). Example plugins from `ext-*` must never gain an
    `install()` - a stray `libnccl-net.so` in the prefix risks accidental
    dlopen by NCCL's plugin chain. Destinations use `GNUInstallDirs` variables
-   (harness pins `CMAKE_INSTALL_LIBDIR=lib`); never hardcode `lib64`.
+   (the harness pins the canonical libdir, currently `lib64` per `eugo.std` `CANONICAL_INSTALL_LIBDIR`); never hardcode a libdir - use the GNUInstallDirs variable.
 
 ## Invariants that must not regress (grep these)
 
