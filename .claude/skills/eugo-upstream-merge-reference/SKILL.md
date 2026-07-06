@@ -49,10 +49,12 @@ index so you open the right section instead of rediscovering it.
    Missing copy = `fatal error: 'doca_gpunetio/doca_gpunetio_device.h' file not found`.
 6. Not every `.cpp` near CUDA code needs `.cu` - only rename if it really has
    `__device__`/`__global__` or includes `.cuh`.
-7. `__stwt(uint4*, uint4)` missing in clang 20 - guarded inline-PTX workaround in
-   `src/include/nccl_device/gin/proxy/gin_proxy.h`; drop via
-   `NCCL_EUGO_HAS_STWT_UINT4` once clang ships it (see
-   `__deleteme/STWT_INVESTIGATION.md`).
+7. `__stwt(uint4*, uint4)` - clang 23+ ships it natively in
+   `__clang_cuda_intrinsics.h`; the fork's temporary inline-PTX workaround in
+   `src/include/nccl_device/gin/proxy/gin_proxy.h` was REMOVED 2026-07-06
+   (redefinition error otherwise). Do NOT re-add our unguarded copy on merges;
+   upstream master's own fallback is guarded `__clang_major__ < 21` (inert for
+   us) and is fine to take verbatim (see `__deleteme/STWT_INVESTIGATION.md`).
 
 ## Post-merge gate (from 3.4 + 8)
 
