@@ -17,16 +17,6 @@
 #include "../gin_device_host_common.h"
 #include "gin_proxy_device_host_common.h"
 
-// @EUGO_CHANGE @begin: temporary `__stwt(uint4*, uint4)  implementation for clang CUDA compilation (until we upgrade to llvm23+ which has this intrinsic). See detailed investigation and verification in __deleteme/STWT_INVESTIGATION.md
-#if defined(__clang__) && defined(__CUDA__) && !defined(NCCL_EUGO_HAS_STWT_UINT4)
-__device__ __forceinline__ void __stwt(uint4* ptr, uint4 val) {
-  asm volatile("st.global.wt.v4.u32 [%0], {%1,%2,%3,%4};"
-    :: "l"(ptr), "r"(val.x), "r"(val.y), "r"(val.z), "r"(val.w)
-    : "memory");
-  }
-  #endif
-// @EUGO_CHANGE @end: temporary `__stwt(uint4*, uint4)  implementation for clang CUDA compilation (until we upgrade to llvm23+ which has this intrinsic). See detailed investigation and verification in __deleteme/STWT_INVESTIGATION.md
-
 namespace nccl {
 namespace gin {
 namespace proxy {
