@@ -5,8 +5,9 @@ description: Pre-commit review checklist for CMake changes in the eugo nccl-cmak
 
 # eugo CMake review (nccl-cmake, pre-commit)
 
-Backbone: the non-negotiable rules R1-R6 in `.github/copilot-instructions.md`
-section 1. This skill is the diff-time checklist; that doc is the rationale.
+Backbone: the fork's non-negotiable rules in CLAUDE.md (clang-only, CMake-only,
+flat source list, annotations, xla_clang.patch delta, option reduction). This
+skill is the diff-time checklist.
 
 ## Annotation style (THIS repo - differs from the pytorch fork)
 
@@ -65,8 +66,8 @@ grep -rn '<<<<<<<\|>>>>>>>' CMakeLists.txt src/ cmake/   # no conflict markers
 cmake -B eugo_build -S . -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_CUDA_COMPILER=clang++  # configure passes
 ```
 
-Update `.github/copilot-instructions.md` (per-file table, pitfalls) in the same
-commit when the diff changes merge-relevant behavior.
+Update the eugo-upstream-merge-reference skill (per-file table, pitfalls) in
+the same commit when the diff changes merge-relevant behavior.
 
 ## Related
 
