@@ -52,8 +52,9 @@ index so you open the right section instead of rediscovering it.
 7. `__stwt(uint4*, uint4)` - clang 23+ ships it natively in
    `__clang_cuda_intrinsics.h`; the fork's temporary inline-PTX workaround in
    `src/include/nccl_device/gin/proxy/gin_proxy.h` was REMOVED 2026-07-06
-   (redefinition error otherwise). Do NOT re-add on merges (see
-   `__deleteme/STWT_INVESTIGATION.md`).
+   (redefinition error otherwise). Do NOT re-add our unguarded copy on merges;
+   upstream master's own fallback is guarded `__clang_major__ < 21` (inert for
+   us) and is fine to take verbatim (see `__deleteme/STWT_INVESTIGATION.md`).
 
 ## Post-merge gate (from 3.4 + 8)
 
