@@ -42,12 +42,31 @@ set(NCCL_VERSION "${NCCL_MAJOR}.${NCCL_MINOR}.${NCCL_PATCH}")
 
 
 # === @begin: General Configuration ===
-# Unset CMAKE_CUDA_FLAGS to fix CMake bugs in detecting the CUDA toolchain
-set(CMAKE_CUDA_FLAGS "") # @EUGO_CHANGE: Added to fix CMake bugs in detecting the CUDA toolchain
+# @EUGO_CHANGE: @begin - CUDA flags + device-link lane are owned by eugo_toolchain.cmake (2026-07-09)
+# 1. The pre-toolchain-era clobber below discarded the toolchain-injected
+#    `-fgpu-rdc -foffload-lto=full --offload-link` trio (CMAKE_CUDA_FLAGS). The toolchain
+#    keeps the CUDA detection phase clean itself via `set(CMAKE_CUDA_FLAGS_INIT "")`, so
+#    the clobber is redundant AND destructive.
+# set(CMAKE_CUDA_FLAGS "") # @EUGO_CHANGE: Added to fix CMake bugs in detecting the CUDA toolchain
+# @EUGO_CHANGE: @end
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
-set(CMAKE_CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+# @EUGO_CHANGE: @begin - legacy CUDA device-link lane explicitly OFF (2026-07-09)
+# 2. With the clang offload-new-driver lane (the toolchain trio above), these two ON fired
+#    CMake's LEGACY nvlink/fatbinary device-link pipeline ON TOP of clang-linker-wrapper:
+#    doubled fatbin entries per arch, legacy `fatbinary -im=` invocations (needs the
+#    image's fatbinary wrapper to translate), per-target `fatbinData` link stubs that
+#    collided under -flto=full (the wrapper's uniquifier + the package's -fno-lto CUDAFLAGS
+#    band-aid existed solely for this). RDC semantics are NOT lost: the toolchain passes
+#    -fgpu-rdc explicitly and the device link happens at the final link via --offload-link
+#    (see target_link_options(nccl ...) in src/CMakeLists.txt).
+#    Explicit OFF > unset (Ben, 2026-07-09). Ref: protomolecule
+#    dependencies/native/llvm_toolchain/reference/cfg_rationale.md "device-link doubling".
+# set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
+# set(CMAKE_CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+set(CMAKE_CUDA_SEPARABLE_COMPILATION OFF)
+set(CMAKE_CUDA_RESOLVE_DEVICE_SYMBOLS OFF)
+# @EUGO_CHANGE: @end
 #set(CMAKE_C_VISIBILITY_PRESET default) # Intentionally commented out
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_CUDA_VISIBILITY_PRESET hidden)
@@ -58,9 +77,17 @@ project(nccl
     VERSION ${NCCL_VERSION}
 )
 
-set(CMAKE_CUDA_FLAGS
-  " $ENV{CUDAFLAGS}"
-)
+# @EUGO_CHANGE: @begin - second CUDA-flags clobber disabled (2026-07-09)
+# Same class as the pre-project() clobber above: this post-project() plain set()
+# SHADOWS the toolchain-composed cache value (CUDAFLAGS + `-fgpu-rdc
+# -foffload-lto=full --offload-link`) with bare $ENV{CUDAFLAGS} - the trio never
+# reached a single .cu compile line. The toolchain already concatenates
+# $ENV{CUDAFLAGS} into CMAKE_CUDA_FLAGS itself (sentinel-gated), so this line is
+# redundant AND destructive.
+# set(CMAKE_CUDA_FLAGS
+#   " $ENV{CUDAFLAGS}"
+# )
+# @EUGO_CHANGE: @end
 
 # @EUGO_CHANGE: we only support Linux so need to detect OS
 # Detect OS
@@ -94,8 +121,17 @@ set(
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EUGO_COMMON_WARNING_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EUGO_COMMON_WARNING_FLAGS}")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} ${EUGO_COMMON_WARNING_FLAGS}")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3")
-set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS} -O3")
+# @EUGO_CHANGE: @begin - stop duplicating base flags into the per-config buckets (2026-07-09)
+# CMake composes the compile line as CMAKE_<LANG>_FLAGS + CMAKE_<LANG>_FLAGS_<CONFIG>, so
+# rebuilding the _RELEASE bucket from the base var put EVERY base flag on the line twice
+# (visible with the toolchain lane: `-fgpu-rdc -foffload-lto=full --offload-link` x2).
+# Keep the previous _RELEASE semantics EXACTLY (bare -O3; note: CMake's default would be
+# "-O3 -DNDEBUG" - the NDEBUG question is deliberately left unchanged, ballot pending).
+# set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3")
+# set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS} -O3")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+set(CMAKE_CUDA_FLAGS_RELEASE "-O3")
+# @EUGO_CHANGE: @end
 # === @end: Warnings Configuration ===
 
 
@@ -438,6 +474,26 @@ include(GNUInstallDirs)
 
 # Install the headers into the include directory
 install(FILES ${NCCL_PUBLIC_HEADERS} TYPE INCLUDE)
+# @EUGO_CHANGE: @begin: install the nccl_device/ header tree — src/CMakeLists.txt exports
+# NCCL_DEVICE_HEADERS_DIR PARENT_SCOPE with a comment promising an `install(DIRECTORY ...)` here,
+# but the rule was never written: the installed nccl_device.h:8 does `#include "nccl_device/coop.h"`
+# and every consumer of the NCCL 2.28+ symmem device API (e.g. torch's NCCLSymmetricMemory) hit
+# "fatal error: 'nccl_device/coop.h' file not found". Upstream's Makefile ships the full tree
+# (src/Makefile:11). No trailing slash → lands as include/nccl_device/...; FILES_MATCHING skips
+# the tree's README.md. (DOCA gdaki/proxy sub-headers are include-guarded off unless
+# NCCL_GIN_{GDAKI,PROXY}_ENABLE is defined — no DOCA staging needed for the default surface.)
+install(DIRECTORY ${NCCL_DEVICE_HEADERS_DIR} TYPE INCLUDE FILES_MATCHING PATTERN "*.h")
+# The gdaki lane defaults ON for CUDA >= 12.2 && sm_70+ (gin_device_common.h), so the DOCA
+# gpunetio device headers must ride along — upstream stages them the same way (src/Makefile:88-90:
+# DOCA_INC_INSTALL := $(INCDIR)/nccl_device/gin/gdaki/doca_gpunetio; doca_gpunetio_device.h +
+# common/*.h + device/*.cuh).
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/transport/net_ib/gdaki/doca-gpunetio/include/doca_gpunetio_device.h
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/nccl_device/gin/gdaki/doca_gpunetio)
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/transport/net_ib/gdaki/doca-gpunetio/include/common
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/nccl_device/gin/gdaki/doca_gpunetio FILES_MATCHING PATTERN "*.h")
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/transport/net_ib/gdaki/doca-gpunetio/include/device
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/nccl_device/gin/gdaki/doca_gpunetio FILES_MATCHING PATTERN "*.cuh")
+# @EUGO_CHANGE: @end
 
 # @EUGO_CHANGE: @EUGO_NOTE: Only `nccl` (libnccl.so) and `ncclras` are installed as shippable artifacts.
 # The five targets from the ext-*/example add_subdirectory() calls above are intentionally

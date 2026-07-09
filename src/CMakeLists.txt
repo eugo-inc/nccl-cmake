@@ -427,6 +427,16 @@ target_link_options(nccl PRIVATE
     "$<HOST_LINK:LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnccl.map>"
 )
 
+# @EUGO_CHANGE: @begin - engage the offload linker on nccl's link (2026-07-09)
+# `nccl` is a mixed CXX/CUDA target (its device code arrives WHOLE_ARCHIVE'd from the
+# nccl_colldevice static lib), so CMake links it as CXX - and CMAKE_CUDA_FLAGS (with the
+# eugo toolchain's `--offload-link`) never ride a CXX link line. Without this flag
+# clang-linker-wrapper never runs: no device link, no fatbin registration, first kernel
+# launch fails. With the legacy device-link knobs OFF (root CMakeLists.txt) this is THE
+# device link. Link-side contract SSOT: eugo_toolchain.cmake (CMAKE_CUDA_FLAGS trio).
+target_link_options(nccl PRIVATE --offload-link)
+# @EUGO_CHANGE: @end
+
 
 target_include_directories(
     nccl
