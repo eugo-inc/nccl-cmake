@@ -447,6 +447,16 @@ install(FILES ${NCCL_PUBLIC_HEADERS} TYPE INCLUDE)
 # the tree's README.md. (DOCA gdaki/proxy sub-headers are include-guarded off unless
 # NCCL_GIN_{GDAKI,PROXY}_ENABLE is defined — no DOCA staging needed for the default surface.)
 install(DIRECTORY ${NCCL_DEVICE_HEADERS_DIR} TYPE INCLUDE FILES_MATCHING PATTERN "*.h")
+# The gdaki lane defaults ON for CUDA >= 12.2 && sm_70+ (gin_device_common.h), so the DOCA
+# gpunetio device headers must ride along — upstream stages them the same way (src/Makefile:88-90:
+# DOCA_INC_INSTALL := $(INCDIR)/nccl_device/gin/gdaki/doca_gpunetio; doca_gpunetio_device.h +
+# common/*.h + device/*.cuh).
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/transport/net_ib/gdaki/doca-gpunetio/include/doca_gpunetio_device.h
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/nccl_device/gin/gdaki/doca_gpunetio)
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/transport/net_ib/gdaki/doca-gpunetio/include/common
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/nccl_device/gin/gdaki/doca_gpunetio FILES_MATCHING PATTERN "*.h")
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/transport/net_ib/gdaki/doca-gpunetio/include/device
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/nccl_device/gin/gdaki/doca_gpunetio FILES_MATCHING PATTERN "*.cuh")
 # @EUGO_CHANGE: @end
 
 # @EUGO_CHANGE: @EUGO_NOTE: Only `nccl` (libnccl.so) and `ncclras` are installed as shippable artifacts.
