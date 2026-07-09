@@ -438,6 +438,16 @@ include(GNUInstallDirs)
 
 # Install the headers into the include directory
 install(FILES ${NCCL_PUBLIC_HEADERS} TYPE INCLUDE)
+# @EUGO_CHANGE: @begin: install the nccl_device/ header tree — src/CMakeLists.txt exports
+# NCCL_DEVICE_HEADERS_DIR PARENT_SCOPE with a comment promising an `install(DIRECTORY ...)` here,
+# but the rule was never written: the installed nccl_device.h:8 does `#include "nccl_device/coop.h"`
+# and every consumer of the NCCL 2.28+ symmem device API (e.g. torch's NCCLSymmetricMemory) hit
+# "fatal error: 'nccl_device/coop.h' file not found". Upstream's Makefile ships the full tree
+# (src/Makefile:11). No trailing slash → lands as include/nccl_device/...; FILES_MATCHING skips
+# the tree's README.md. (DOCA gdaki/proxy sub-headers are include-guarded off unless
+# NCCL_GIN_{GDAKI,PROXY}_ENABLE is defined — no DOCA staging needed for the default surface.)
+install(DIRECTORY ${NCCL_DEVICE_HEADERS_DIR} TYPE INCLUDE FILES_MATCHING PATTERN "*.h")
+# @EUGO_CHANGE: @end
 
 # @EUGO_CHANGE: @EUGO_NOTE: Only `nccl` (libnccl.so) and `ncclras` are installed as shippable artifacts.
 # The five targets from the ext-*/example add_subdirectory() calls above are intentionally
